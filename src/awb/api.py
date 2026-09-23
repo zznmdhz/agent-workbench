@@ -35,7 +35,7 @@ from .handoff import create_handoff, get_handoff, link_continuation
 from .ingest import receive_batch, resolve_quarantine, server_epoch
 from .models import Batch
 from .resources import record_samples
-from .stats import calculate
+from .stats import calculate, timeline
 
 
 class Credentials(BaseModel):
@@ -268,6 +268,13 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
               _: str = Depends(require_owner)):
         try:
             return calculate(db, day, tz, device_ids, agent_ids, model_ids)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(422, "Invalid day or timezone") from exc
+
+    @app.get("/v1/timeline")
+    def daily_timeline(day: str, tz: str = "Asia/Hong_Kong", _: str = Depends(require_owner)):
+        try:
+            return timeline(db, day, tz)
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, "Invalid day or timezone") from exc
 

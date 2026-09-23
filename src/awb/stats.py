@@ -131,3 +131,22 @@ def _ms(value: str | None) -> int | None:
     if value is None:
         return None
     return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000)
+
+
+def timeline(db: Database, day: str, tz: str) -> dict:
+    start, end = day_bounds_utc_ms(day, tz)
+    with db.read() as conn:
+        rows = conn.execute("""SELECT r.id,r.session_id,r.status,r.start_at,r.end_at,
+            s.agent,s.title,d.name AS device_name FROM runs r JOIN sessions s ON s.id=r.session_id
+            LEFT JOIN devices d ON d.id=r.device_id WHERE s.archived=0 AND r.start_at IS NOT NULL
+            ORDER BY r.start_at LIMIT 10000""").fetchall()
+    items = []
+    for row in rows:
+        a, b = _ms(row["start_at"]), _ms(row["end_at"])
+        if a is None or a >= end or (b is not None and b <= start):
+            continue
+        items.append({**dict(row), "visible_start_ms": max(a, start),
+                      "visible_end_ms": min(b, end) if b is not None else None,
+                      "boundary_quality": "complete" if b is not None and b >= a else "unknown_end"})
+    return {"day": day, "tz": tz, "window_start_ms": start, "window_end_ms": end,
+            "items": items[:1000], "truncated": len(items) > 1000}

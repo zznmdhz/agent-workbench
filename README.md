@@ -50,7 +50,7 @@ uv run awb add-source hermes "$HOME\AppData\Local\hermes\state.db" --policy stat
 - [运行手册](docs/RUNBOOK.md)
 - [公开路线图](docs/project/ROADMAP.md)
 
-GitHub Issues 记录任务与缺陷，Milestones 对应 P0、V0.1、V0.2、V0.3。公开仓库不承载用户设备的私人证据；真实探针报告在本机生成，只发布脱敏结论。
+[GitHub Issues](https://github.com/zznmdhz/agent-workbench/issues) 记录 13 项待完成开发与实机验收任务，[Milestones](https://github.com/zznmdhz/agent-workbench/milestones) 对应 P0、V0.1、V0.2、V0.3。公开仓库不承载用户设备的私人证据；真实探针报告在本机生成，只发布脱敏结论。
 
 ## 许可证
 

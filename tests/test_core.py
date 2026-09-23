@@ -12,6 +12,7 @@ from awb.backup import create_backup, restore_backup
 from awb.codec import ack_prefix, cumulative_deltas, union_ms
 from awb.collector import Outbox, make_event, scan_codex
 from awb.filecheck import check_local, safe_relative
+from awb.handoff import create_handoff, link_continuation
 
 
 def owner_client(tmp_path: Path) -> tuple[TestClient, str]:
@@ -122,3 +123,31 @@ def test_file_check_stays_inside_registered_root_and_backup_restores(tmp_path: P
     restored = restore_backup(archive, tmp_path / "restored")
     assert restored.is_file()
     assert create_app(restored).state.db.path == restored
+
+
+def test_handoff_is_frozen_and_link_requires_target_device(tmp_path: Path):
+    client, _ = owner_client(tmp_path)
+    db = client.app.state.db
+    source_device, target_device = str(uuid4()), str(uuid4())
+    source_id, target_source = str(uuid4()), str(uuid4())
+    source_session, target_session = str(uuid4()), str(uuid4())
+    with db.tx() as conn:
+        for ident in (source_device, target_device):
+            conn.execute("INSERT INTO devices(id,name,os,environment,token_hash,registered_at) VALUES(?,?,?,?,?,?)",
+                         (ident, ident, "test", ident, ident, "2026-09-23T00:00:00Z"))
+        for ident, device in ((source_id, source_device), (target_source, target_device)):
+            conn.execute("""INSERT INTO sources(id,device_id,agent,profile,capability_json,created_at)
+                VALUES(?,?,?,?,?,?)""", (ident, device, "codex", "default",
+                                          '{"content_policy":"full_content"}', "2026-09-23T00:00:00Z"))
+        for ident, origin, device in ((source_session, source_id, source_device),
+                                       (target_session, target_source, target_device)):
+            conn.execute("INSERT INTO sessions(id,source_id,native_id,agent,device_id) VALUES(?,?,?,?,?)",
+                         (ident, origin, ident, "codex", device))
+        conn.execute("""INSERT INTO messages(id,session_id,native_id,role,input_origin,body,
+            content_state,event_id) VALUES(?,?,?,?,?,?,?,?)""",
+                     (str(uuid4()), source_session, "m1", "user", "human", "Please continue",
+                      "full", "fixture-event"))
+    result = create_handoff(db, source_session, target_device, tmp_path / "handoffs")
+    archive = tmp_path / "handoffs" / (result["handoff_id"] + ".zip")
+    assert archive.is_file()
+    assert link_continuation(db, result["handoff_id"], target_session)["status"] == "linked"

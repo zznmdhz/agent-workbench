@@ -6,7 +6,7 @@
 
 需要 Python 3.12、uv 0.12.17。`uv sync --frozen` 后运行 `uv run awb init-owner --db .local/server.db`，交互输入至少 12 字符密码，再运行 `uv run awb serve --db .local/server.db`。浏览器打开 `http://127.0.0.1:8765`。首次初始化只允许一次。服务器只使用一个 Uvicorn worker。
 
-NAS 使用 `deploy/compose.example.yaml` 作为模板，在真实 NAS 上按实际路径和架构调整。容器只对 NAS 本机监听 8765，外部访问应经可信 HTTPS 反向代理，并保持应用登录。部署卷 `/data` 只存本工具数据，绝不挂载 Codex/Hermes 凭据目录。首次设置 owner：`docker compose run --rm agent-workbench init-owner --db /data/agent-workbench.db`；构建启动后检查 `/health/ready`。该镜像在当前 Windows 主机没有 Docker，尚未实测。
+NAS 使用 `deploy/compose.example.yaml` 作为模板，在真实 NAS 上按实际路径和架构调整。容器只对 NAS 本机监听 8765，外部访问应经可信 HTTPS 反向代理，并在容器环境设置 `AWB_PUBLIC_URL=https://实际访问域名` 以校验浏览器写请求 Origin。部署卷 `/data` 只存本工具数据，绝不挂载 Codex/Hermes 凭据目录。首次设置 owner：`docker compose run --rm agent-workbench init-owner --db /data/agent-workbench.db`；构建启动后检查 `/health/ready`。该镜像在当前 Windows 主机没有 Docker，尚未实测。
 
 ## 采集端
 

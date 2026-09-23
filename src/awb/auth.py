@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import secrets
 import time
 from datetime import datetime, timezone
@@ -93,12 +94,13 @@ def require_owner_write(request: Request) -> None:
     if request.headers.get("x-awb-csrf") != csrf:
         raise HTTPException(403, "CSRF token required")
     origin = request.headers.get("origin")
-    if origin and origin.rstrip("/") != str(request.base_url).rstrip("/"):
+    expected_origin = os.environ.get("AWB_PUBLIC_URL", str(request.base_url)).rstrip("/")
+    if origin and origin.rstrip("/") != expected_origin:
         raise HTTPException(403, "Origin mismatch")
 
 
 def set_owner_cookie(response: Response, token: str, request: Request) -> None:
-    secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    secure = os.environ.get("AWB_PUBLIC_URL", "").startswith("https://") or request.url.scheme == "https"
     response.set_cookie("awb_session", token, httponly=True, secure=secure, samesite="strict", max_age=86400, path="/")
 
 

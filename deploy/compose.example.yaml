@@ -5,6 +5,8 @@ services:
       dockerfile: Dockerfile
     image: agent-workbench:local
     restart: unless-stopped
+    environment:
+      AWB_PUBLIC_URL: ${AWB_PUBLIC_URL:-http://127.0.0.1:8765}
     ports:
       - "127.0.0.1:8765:8765"
     volumes:
