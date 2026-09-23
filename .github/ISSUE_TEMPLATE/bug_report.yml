@@ -1,0 +1,24 @@
+name: Bug report
+description: Report a reproducible issue without private transcript content.
+title: "bug: "
+labels: [bug]
+body:
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Include the trigger, expected behavior and actual behavior. Redact tokens, paths and transcript text.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version and OS
+    validations:
+      required: true

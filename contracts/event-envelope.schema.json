@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:agent-workbench:event-envelope:v1",
+  "title": "Agent Workbench Event Envelope v1",
+  "description": "Planning contract for the product's canonical event envelope. Fact-specific payload constraints are specified in 02_EXECUTION_SPEC.md and must be expanded to discriminated Pydantic models during P0.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "event_id", "body_hash", "content"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "event_id": {"$ref": "#/$defs/hash"},
+    "body_hash": {"$ref": "#/$defs/hash"},
+    "content": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_instance_id", "native_session_id", "fact_kind", "native_fact_id", "revision_key", "source_order", "occurred_at", "quality", "execution", "supersedes_event_id", "payload"],
+      "properties": {
+        "source_instance_id": {"type": "string", "format": "uuid"},
+        "native_session_id": {"type": "string", "minLength": 1, "maxLength": 512},
+        "fact_kind": {"enum": ["session.observed", "message.observed", "run.observed", "usage.observed", "file.observed", "gap.observed"]},
+        "native_fact_id": {"type": "string", "minLength": 1, "maxLength": 1024},
+        "revision_key": {"type": "string", "minLength": 1, "maxLength": 256},
+        "source_order": {"type": ["integer", "null"], "minimum": 0},
+        "occurred_at": {"type": ["string", "null"], "format": "date-time"},
+        "supersedes_event_id": {"anyOf": [{"$ref": "#/$defs/hash"}, {"type": "null"}]},
+        "quality": {
+          "type": "object", "additionalProperties": false,
+          "required": ["certainty", "rule_id", "reason"],
+          "properties": {
+            "certainty": {"enum": ["recorded", "derived", "estimated", "unknown"]},
+            "rule_id": {"type": ["string", "null"]},
+            "reason": {"type": ["string", "null"]}
+          }
+        },
+        "execution": {
+          "type": "object", "additionalProperties": false,
+          "required": ["physical_device_id", "environment_id", "basis"],
+          "properties": {
+            "physical_device_id": {"type": ["string", "null"], "format": "uuid"},
+            "environment_id": {"type": ["string", "null"], "format": "uuid"},
+            "basis": {"enum": ["source_metadata", "live_observed", "user_confirmed", "unknown"]}
+          }
+        },
+        "payload": {"$ref": "#/$defs/jsonObject"}
+      }
+    }
+  },
+  "$defs": {
+    "hash": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "jsonObject": {"type": "object", "additionalProperties": {"$ref": "#/$defs/jsonValue"}},
+    "jsonValue": {
+      "anyOf": [
+        {"type": ["string", "integer", "boolean", "null"]},
+        {"type": "array", "items": {"$ref": "#/$defs/jsonValue"}},
+        {"$ref": "#/$defs/jsonObject"}
+      ]
+    }
+  }
+}

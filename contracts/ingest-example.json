@@ -1,0 +1,156 @@
+{
+  "batch_id": "55555555-5555-4555-8555-555555555555",
+  "collector_id": "44444444-4444-4444-8444-444444444444",
+  "outbox_epoch": "66666666-6666-4666-8666-666666666666",
+  "entries": [
+    {
+      "seq": 1,
+      "observation": {
+        "observed_at": "2026-09-23T01:10:01Z",
+        "adapter_version": "fixture-1",
+        "source_locator": {
+          "kind": "synthetic",
+          "record": 1
+        }
+      },
+      "event": {
+        "schema_version": 1,
+        "event_id": "d1c5173af1b14b00a320480ed3f7fce578d149a87abf1c6e5fe631b36df9310a",
+        "body_hash": "5a965b0c3dd67c02f038c3962e7284389c53b19671e9f6c967932c45fa5abcee",
+        "content": {
+          "source_instance_id": "11111111-1111-4111-8111-111111111111",
+          "native_session_id": "fictional-session-001",
+          "fact_kind": "message.observed",
+          "native_fact_id": "message-001",
+          "revision_key": "initial",
+          "source_order": 1,
+          "occurred_at": "2026-09-23T01:00:00Z",
+          "quality": {
+            "certainty": "recorded",
+            "rule_id": null,
+            "reason": null
+          },
+          "execution": {
+            "physical_device_id": "22222222-2222-4222-8222-222222222222",
+            "environment_id": "33333333-3333-4333-8333-333333333333",
+            "basis": "live_observed"
+          },
+          "supersedes_event_id": null,
+          "payload": {
+            "native_message_id": "message-001",
+            "role": "user",
+            "input_origin": "human",
+            "content_state": "full",
+            "body": "请检查方案。",
+            "source_text_char_count": 6,
+            "native_turn_id": "turn-001",
+            "finalized": true,
+            "inherited_from": null
+          }
+        }
+      }
+    },
+    {
+      "seq": 2,
+      "observation": {
+        "observed_at": "2026-09-23T01:10:01Z",
+        "adapter_version": "fixture-1",
+        "source_locator": {
+          "kind": "synthetic",
+          "record": 2
+        }
+      },
+      "event": {
+        "schema_version": 1,
+        "event_id": "b741f72ceeb026c8fc94db253fac2e32178137cc931888a078e5622cf4d6a69a",
+        "body_hash": "bc76f94166a161ac44277fcd15ce6a8ec12579bfffe3afa01313922a46b7a2d5",
+        "content": {
+          "source_instance_id": "11111111-1111-4111-8111-111111111111",
+          "native_session_id": "fictional-session-001",
+          "fact_kind": "run.observed",
+          "native_fact_id": "turn-001",
+          "revision_key": "started",
+          "source_order": 2,
+          "occurred_at": "2026-09-23T01:00:00Z",
+          "quality": {
+            "certainty": "recorded",
+            "rule_id": null,
+            "reason": null
+          },
+          "execution": {
+            "physical_device_id": "22222222-2222-4222-8222-222222222222",
+            "environment_id": "33333333-3333-4333-8333-333333333333",
+            "basis": "live_observed"
+          },
+          "supersedes_event_id": null,
+          "payload": {
+            "native_turn_id": "turn-001",
+            "status": "running",
+            "start_at": "2026-09-23T01:00:00Z",
+            "end_at": null,
+            "start_basis": "source_run_start",
+            "end_basis": null,
+            "parent_run_ref": null,
+            "duration_ms": null,
+            "duration_basis": null,
+            "model_attribution": {
+              "kind": "single",
+              "reported_model": "fixture-model-A"
+            }
+          }
+        }
+      }
+    },
+    {
+      "seq": 3,
+      "observation": {
+        "observed_at": "2026-09-23T01:10:01Z",
+        "adapter_version": "fixture-1",
+        "source_locator": {
+          "kind": "synthetic",
+          "record": 3
+        }
+      },
+      "event": {
+        "schema_version": 1,
+        "event_id": "ecd939f4a99b18e9950f1a8fa9c8ffeb109b8ad213293f4883eea2cbe17f3d9d",
+        "body_hash": "bb9d233c87cb58d03124120abe94764cbb021fda5ccc8fa7ddfb39304858fc99",
+        "content": {
+          "source_instance_id": "11111111-1111-4111-8111-111111111111",
+          "native_session_id": "fictional-session-001",
+          "fact_kind": "run.observed",
+          "native_fact_id": "turn-001",
+          "revision_key": "completed",
+          "source_order": 3,
+          "occurred_at": "2026-09-23T01:10:00Z",
+          "quality": {
+            "certainty": "recorded",
+            "rule_id": null,
+            "reason": null
+          },
+          "execution": {
+            "physical_device_id": "22222222-2222-4222-8222-222222222222",
+            "environment_id": "33333333-3333-4333-8333-333333333333",
+            "basis": "live_observed"
+          },
+          "supersedes_event_id": "b741f72ceeb026c8fc94db253fac2e32178137cc931888a078e5622cf4d6a69a",
+          "payload": {
+            "native_turn_id": "turn-001",
+            "status": "completed",
+            "start_at": "2026-09-23T01:00:00Z",
+            "end_at": "2026-09-23T01:10:00Z",
+            "start_basis": "source_run_start",
+            "end_basis": "source_terminal",
+            "parent_run_ref": null,
+            "duration_ms": 600000,
+            "duration_basis": "source_elapsed",
+            "model_attribution": {
+              "kind": "single",
+              "reported_model": "fixture-model-A"
+            }
+          }
+        }
+      }
+    }
+  ]
+}
