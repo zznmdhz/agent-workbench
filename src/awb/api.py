@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import sqlite3
+import sys
 from pathlib import Path
 from uuid import UUID
 
@@ -436,7 +437,8 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         return {"deleted": True, "statistics_retained": body.keep_statistics,
                 "backup_notice": "Older backups may retain the content until their retention period expires."}
 
-    web_dist = Path(__file__).resolve().parents[2] / "web" / "dist"
+    bundle_root = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[2]
+    web_dist = bundle_root / "web" / "dist"
     if web_dist.exists():
         app.mount("/assets", StaticFiles(directory=web_dist / "assets"), name="assets")
 

@@ -6,7 +6,9 @@ import json
 import os
 import platform
 import time
+import webbrowser
 from pathlib import Path
+from threading import Timer
 from uuid import uuid4
 
 import httpx
@@ -47,7 +49,25 @@ def init_owner(db: Path = typer.Option(Path("data/agent-workbench.db"), help="Se
 def serve(host: str = "127.0.0.1", port: int = 8765,
           db: Path = typer.Option(Path("data/agent-workbench.db"), help="Server database path")):
     os.environ["AWB_DB_PATH"] = str(db)
-    uvicorn.run("awb.api:app", host=host, port=port, workers=1)
+    from .api import app as service_app
+
+    uvicorn.run(service_app, host=host, port=port, workers=1)
+
+
+@app.command("open")
+def open_workbench(db: Path = typer.Option(Path("data/agent-workbench.db")),
+                   port: int = typer.Option(8765, min=1, max=65535),
+                   browser: bool = typer.Option(True, "--browser/--no-browser")):
+    store = Database(db)
+    store.initialize()
+    with store.read() as conn:
+        initialized = conn.execute("SELECT 1 FROM owner WHERE id=1").fetchone() is not None
+    if not initialized:
+        password = typer.prompt("Create owner password (12+ characters)", hide_input=True, confirmation_prompt=True)
+        initialize_owner(store, password)
+    if browser:
+        Timer(2.0, lambda: webbrowser.open(f"http://127.0.0.1:{port}/")).start()
+    serve(host="127.0.0.1", port=port, db=db)
 
 
 @app.command("pair")

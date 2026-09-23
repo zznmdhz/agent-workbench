@@ -12,3 +12,5 @@
 本目录只保存可以公开的测试方法、虚构样例和脱敏结果。完整本机探针报告放在 `.local/reports/`，不上传 GitHub。
 
 2026-09-23 本机验证：Windows Codex 15,761 条与 Hermes 22,042 条 stats_only 事件写入本地 outbox，合计 37,803 条，全部通过 Pydantic wire contract 验证；未传输到中心或 GitHub。`uv run pytest -q` 通过 5 个自动测试；`uv run ruff check src tests`、`cd web && pnpm build` 通过。GitHub CI 在 Windows/macOS/Linux 上通过代码测试；这不等于对应机器已运行真实 Agent 来源。此结果证明当前 Windows 安装的数据可读取和标准化，不证明所有版本/入口、统计完整性或跨机部署。当前机器没有 Docker，也没有可访问的 Mac/NAS 验收环境。
+
+Windows 便携包验证：PyInstaller 目录构建成功，ZIP 完整性检查通过；从包内 `AgentWorkbench.exe` 启动后，`/health/ready`、网页首页、JS 资源和单 owner 登录均通过本机 smoke test。测试没有执行真实系统安装或 Windows 登录后自启动；包未签名。

@@ -10,6 +10,12 @@
 
 ## 本地开发
 
+### Windows 便携预览包
+
+[下载 Windows 便携预览 ZIP](https://github.com/zznmdhz/agent-workbench/releases/tag/v0.1.0-preview.1)。解压后双击 `Start-AgentWorkbench.cmd`，首次启动在窗口中设置管理员密码；浏览器随后打开 `http://127.0.0.1:8765/`。如需采集这台电脑的活动，再按包内 `README-PORTABLE.md` 依次运行配对与采集脚本。这个包没有系统安装程序、自启动或自动更新，也尚未完成 Mac/NAS 实机验收。
+
+### 从源码运行
+
 需要 Python 3.12、[uv](https://docs.astral.sh/uv/) 和 Node.js 22+/pnpm。依赖锁定在 `uv.lock` 与 `web/pnpm-lock.yaml`。
 
 ```powershell
@@ -24,11 +30,10 @@ pnpm --dir web build
 首次本地运行：
 
 ```powershell
-uv run awb init-owner --db .local/server.db
-uv run awb serve --db .local/server.db
+uv run awb open --db .local/server.db
 ```
 
-访问 `http://127.0.0.1:8765`。首次使用先在网页的“设备与设置”生成一次性配对码，再在采集机器运行：
+命令会在首次运行时引导设置密码并打开浏览器。然后在网页的“设备与设置”生成一次性配对码，再在采集机器运行：
 
 ```powershell
 uv run awb pair http://127.0.0.1:8765 123456789

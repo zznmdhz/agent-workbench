@@ -23,6 +23,9 @@ dev = [
   "pytest>=8.4,<10",
   "ruff>=0.13,<1",
 ]
+build = [
+  "pyinstaller>=6.22,<7",
+]
 
 [build-system]
 requires = ["uv_build>=0.12.17,<0.13"]
