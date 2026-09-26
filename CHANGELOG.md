@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2 — First import visibility
+
+- Refresh the overview and device state every 15 seconds while the workbench is open, so newly imported history appears without a manual reload.
+- Show import progress and automatically select the most recent activity date when today has no imported activity.
+- Explain unknown request-level token counts when only cumulative counter evidence is available.
+
 ## 0.2.1 — Windows first-run usability
 
 - Start-menu and portable launch now run in the background and open the browser without a terminal window.

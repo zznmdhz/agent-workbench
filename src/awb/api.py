@@ -136,7 +136,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     path = Path(db_path or os.environ.get("AWB_DB_PATH", "./data/agent-workbench.db"))
     db = Database(path)
     db.initialize()
-    app = FastAPI(title="Agent Workbench", version="0.2.1")
+    app = FastAPI(title="Agent Workbench", version="0.2.2")
     app.state.db = db
     app.state.desktop_mode = desktop_mode
     app.state.shutdown_callback = None
@@ -174,7 +174,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     def ready():
         with db.read() as conn:
             version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
-        return {"status": "ready", "schema_version": version, "app_version": "0.2.1"}
+        return {"status": "ready", "schema_version": version, "app_version": "0.2.2"}
 
     @app.post("/auth/login")
     def auth_login(body: Credentials, request: Request, response: Response):
