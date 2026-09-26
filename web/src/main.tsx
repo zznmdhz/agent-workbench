@@ -1,13 +1,15 @@
 import React, {useEffect, useState} from 'react'
 import {createRoot} from 'react-dom/client'
-import {TimelinePanel} from './TimelinePanel'
+import {Overview} from './Overview'
 import {HandoffPanel} from './HandoffPanel'
 import './style.css'
 
 type Session = {id:string,title:string|null,agent:string,device_id:string|null,device_name:string,last_activity:string|null,message_count:number,run_count:number,profile:string,cwd:string|null}
 type Message = {id:string,role:string,body:string|null,content_state:string,occurred_at:string|null,source_char_count:number|null}
 type Run = {id:string,status:string,start_at:string|null,end_at:string|null,duration_ms:number|null,model:string|null}
-type Metric = {id:string,value:number|null,unit:string,quality_note:string}
+type Metric = {id:string,value:number|null,unit:string,quality_note:string,included_count:number,excluded_count:number}
+type Trend = {day:string,runs:number,completed:number,human_chars:number,counter_tokens:number}
+type Comparison = {device_id:string,runs:number,settled_duration_ms:number,active_wall_ms:number,human_chars:number,counter_tokens:number}
 type Device = {id:string,name:string,os:string,environment:string,last_heartbeat:string|null,pending_count:number}
 type Source = {id:string,device_id:string,agent:string,profile:string,last_error:string|null,last_scan:string|null,execution_surface:string,capability_json:string}
 
@@ -18,27 +20,26 @@ async function request<T>(path:string, options:RequestInit={}, csrf?:string):Pro
   if(!response.ok)throw new Error(`${response.status}: ${(await response.text()).slice(0,220)}`)
   return response.json()
 }
-const dateLocal=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
+const dateLocal=(tz='Asia/Hong_Kong')=>new Intl.DateTimeFormat('en-CA',{timeZone:tz,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
 const time=(v:string|null)=>v?new Date(v).toLocaleString('zh-CN'): '未知'
-const num=(v:number|null,unit='')=>v===null?'未知':`${new Intl.NumberFormat('zh-CN').format(v)}${unit}`
-const metric=(values:Metric[],id:string)=>values.find(x=>x.id===id)?.value??null
-const dayHongKong=(value:string)=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value))
-const sessionLabel=(s:Session)=>s.title||s.cwd?.split(/[\\/]/).filter(Boolean).at(-1)||'未命名会话'
+const shiftDay=(day:string,offset:number)=>{const d=new Date(`${day}T12:00:00Z`);d.setUTCDate(d.getUTCDate()+offset);return d.toISOString().slice(0,10)}
+const sessionLabel=(s:Session)=>s.title||'未命名会话'
+const projectLabel=(s:Session)=>s.cwd?.split(/[\\/]/).filter(Boolean).at(-1)||null
 
 function App(){
   const [csrf,setCsrf]=useState(''); const [password,setPassword]=useState(''); const [error,setError]=useState('');
   const [confirmation,setConfirmation]=useState(''); const [entry,setEntry]=useState<'checking'|'setup'|'login'|'unavailable'>('checking');
   const [stopped,setStopped]=useState(false);
   const [view,setView]=useState<'overview'|'sessions'|'devices'>('overview'); const [date,setDate]=useState(dateLocal());
-  const [dateManual,setDateManual]=useState(false); const [autoDate,setAutoDate]=useState(false);
+  const [rangeDays,setRangeDays]=useState(1); const [tz,setTz]=useState('Asia/Hong_Kong'); const [deviceId,setDeviceId]=useState(''); const [agent,setAgent]=useState(''); const [model,setModel]=useState('');
   const [sessions,setSessions]=useState<Session[]>([]); const [selected,setSelected]=useState<string|null>(null);
   const [sessionCursor,setSessionCursor]=useState<string|null>(null)
   const [detail,setDetail]=useState<{session:Session,items:Message[],runs:Run[],files:Record<string,unknown>[],next_cursor:string|null}|null>(null)
   const [stats,setStats]=useState<Metric[]>([]); const [devices,setDevices]=useState<Device[]>([]); const [sources,setSources]=useState<Source[]>([])
+  const [trend,setTrend]=useState<Trend[]>([]); const [comparison,setComparison]=useState<Comparison[]>([]); const [models,setModels]=useState<string[]>([]); const [refreshTick,setRefreshTick]=useState(0)
   const [query,setQuery]=useState(''); const [search,setSearch]=useState<{items:{id:string,session_id:string,excerpt:string,title:string|null}[]}|null>(null)
   const [pairCode,setPairCode]=useState(''); const [registration,setRegistration]=useState({id:'',device_id:'',agent:'codex',profile:'default',content_policy:'stats_only'})
   const [loading,setLoading]=useState(false)
-  const latestDay=sessions[0]?.last_activity?dayHongKong(sessions[0].last_activity):null
   const pendingTotal=devices.reduce((total,device)=>total+device.pending_count,0)
   useEffect(()=>{request<{csrf:string}>('/auth/me').then(x=>{setCsrf(x.csrf);setEntry('login')}).catch(()=>{
     request<{needs_setup:boolean,web_setup_available:boolean}>('/auth/setup-status')
@@ -46,18 +47,23 @@ function App(){
       .catch(()=>setError('无法连接工作台。请从开始菜单重新打开。'))
   })},[])
   async function refresh(quiet=false){if(!csrf)return;if(!quiet){setLoading(true);setError('')}try{
-    const [a,b,c,d]=await Promise.all([
-      request<{items:Session[],next_cursor:string|null}>('/v1/sessions?limit=100'),
-      request<{metrics:Metric[]}>(`/v1/stats?day=${date}&tz=Asia%2FHong_Kong`),
-      request<{items:Device[]}>('/v1/devices'),request<{items:Source[]}>('/v1/sources')])
-    setSessions(a.items);setSessionCursor(a.next_cursor);setStats(b.metrics);setDevices(c.items);setSources(d.items)
-    if(!dateManual && c.items.length>0 && c.items.every(device=>device.last_heartbeat && device.pending_count===0) && date===dateLocal() && a.items[0]?.last_activity && metric(b.metrics,'run_count')===0 && metric(b.metrics,'human_input_chars')===0){
-      const recent=dayHongKong(a.items[0].last_activity)
-      if(recent!==date){setAutoDate(true);setDate(recent)}
-    }
+    const start=shiftDay(date,1-rangeDays)
+    const statParams=new URLSearchParams({day:start,through:date,tz})
+    if(deviceId)statParams.append('device_ids',deviceId)
+    if(agent)statParams.append('agent_ids',agent)
+    if(model)statParams.append('model_ids',model)
+    const sessionParams=new URLSearchParams({limit:'100',activity_day:start,activity_through:date,tz})
+    if(deviceId)sessionParams.set('device_id',deviceId)
+    if(agent)sessionParams.set('agent',agent)
+    if(model)sessionParams.set('model',model)
+    const [a,b,c,d,e]=await Promise.all([
+      request<{items:Session[],next_cursor:string|null}>(`/v1/sessions?${sessionParams}`),
+      request<{metrics:Metric[],daily_trend:Trend[],device_comparison:Comparison[]}>(`/v1/stats?${statParams}`),
+      request<{items:Device[]}>('/v1/devices'),request<{items:Source[]}>('/v1/sources'),request<{items:string[]}>('/v1/models')])
+    setSessions(a.items);setSessionCursor(a.next_cursor);setStats(b.metrics);setTrend(b.daily_trend);setComparison(b.device_comparison);setDevices(c.items);setSources(d.items);setModels(e.items);setRefreshTick(old=>old+1)
   }catch(e){if(!quiet)setError(String(e))}finally{if(!quiet)setLoading(false)}}
-  useEffect(()=>{if(!csrf)return;void refresh();if(view==='sessions')return;const timer=window.setInterval(()=>void refresh(true),15000);return()=>window.clearInterval(timer)},[csrf,date,dateManual,view])
-  async function moreSessions(){if(!sessionCursor)return;try{const x=await request<{items:Session[],next_cursor:string|null}>(`/v1/sessions?limit=100&cursor=${encodeURIComponent(sessionCursor)}`);setSessions(old=>[...old,...x.items]);setSessionCursor(x.next_cursor)}catch(e){setError(String(e))}}
+  useEffect(()=>{if(!csrf)return;void refresh();if(view==='sessions')return;const timer=window.setInterval(()=>void refresh(true),15000);return()=>window.clearInterval(timer)},[csrf,date,rangeDays,tz,deviceId,agent,model,view])
+  async function moreSessions(){if(!sessionCursor)return;try{const start=shiftDay(date,1-rangeDays);const params=new URLSearchParams({limit:'100',activity_day:start,activity_through:date,tz,cursor:sessionCursor});if(deviceId)params.set('device_id',deviceId);if(agent)params.set('agent',agent);if(model)params.set('model',model);const x=await request<{items:Session[],next_cursor:string|null}>(`/v1/sessions?${params}`);setSessions(old=>[...old,...x.items]);setSessionCursor(x.next_cursor)}catch(e){setError(String(e))}}
   async function moreMessages(){if(!detail?.next_cursor)return;try{const x=await request<typeof detail>(`/v1/sessions/${selected}/events?cursor=${encodeURIComponent(detail.next_cursor)}`);if(x)setDetail(old=>old?{...old,items:[...old.items,...x.items],next_cursor:x.next_cursor}:x)}catch(e){setError(String(e))}}
   useEffect(()=>{if(!selected){setDetail(null);return}request<typeof detail>(`/v1/sessions/${selected}/events`).then(x=>setDetail(x)).catch(e=>setError(String(e)))},[selected])
   async function doLogin(e:React.FormEvent){e.preventDefault();setError('');try{const x=await request<{csrf:string}>('/auth/login',{method:'POST',body:JSON.stringify({password})});setCsrf(x.csrf);setPassword('')}catch(e){setError('登录失败：'+String(e))}}
@@ -74,8 +80,7 @@ function App(){
   if(!csrf)return <main className="login"><div className="loginCard"><div className="brandIcon">✳</div><h1>{entry==='setup'?'创建管理员密码':'跨 Agent 工作台'}</h1>{entry==='checking'?<p>正在连接工作台…</p>:entry==='setup'?<><p>首次使用，请在这里创建密码。设置完成后会自动进入工作台，以后只需在此页面登录。</p><form onSubmit={doSetup}><label>管理员密码（至少 12 个字符）<input type="password" autoComplete="new-password" minLength={12} value={password} onChange={e=>setPassword(e.target.value)} required autoFocus/></label><label>再次输入密码<input type="password" autoComplete="new-password" minLength={12} value={confirmation} onChange={e=>setConfirmation(e.target.value)} required/></label><button type="submit">创建并进入工作台</button><button type="button" className="secondary" onClick={()=>void cancelSetup()}>暂不设置，关闭工作台</button></form></>:entry==='login'?<><p>输入管理员密码，查看本机 Codex 与 Hermes 的活动。</p><form onSubmit={doLogin}><label>管理员密码<input type="password" autoComplete="current-password" value={password} onChange={e=>setPassword(e.target.value)} required autoFocus/></label><button type="submit">登录</button><button type="button" className="secondary" onClick={()=>void closeLocal()}>关闭工作台</button></form><small>忘记密码？先关闭工作台，再从开始菜单选择“重设管理员密码”。便携版请双击 AgentWorkbenchReset.exe。</small></>:<p>此服务尚未设置管理员。请在 Windows 本机打开 Agent Workbench 桌面程序完成首次设置。</p>}{error&&<div className="error" role="alert">{error}</div>}</div></main>
   return <div className="shell"><aside className="sidebar"><div className="logo"><span className="brandIcon">✳</span><span>Agent<br/>Workbench</span></div><nav aria-label="主导航"><button className={view==='overview'?'active':''} onClick={()=>setView('overview')}>▦　总览</button><button className={view==='sessions'?'active':''} onClick={()=>setView('sessions')}>☷　会话</button><button className={view==='devices'?'active':''} onClick={()=>setView('devices')}>◉　设备与设置</button></nav><div className="sidebarFoot"><span className="liveDot"/> 单用户工作台<br/><small>仅展示已采集证据</small><button className="logout" onClick={()=>void logout()}>退出登录</button><button className="logout" onClick={()=>void shutdown()}>关闭工作台</button></div></aside>
     <main className="main"><header className="top"><div><div className="eyebrow">WORKSPACE / {view==='overview'?'OVERVIEW':view==='sessions'?'SESSIONS':'SETTINGS'}</div><h1>{view==='overview'?'活动总览':view==='sessions'?'会话记录':'设备与设置'}</h1></div><div className="topActions"><span>{loading?'同步中…':'已连接'}</span><button onClick={()=>void refresh()}>刷新</button></div></header>{error&&<div className="error" role="alert">{error}<button onClick={()=>setError('')}>×</button></div>}
-    {view==='overview'&&<><section className="controls"><label>查看日期 <input type="date" value={date} onChange={e=>{setDateManual(true);setAutoDate(false);setDate(e.target.value)}}/></label><span className="muted">统一按香港时区统计 · 未记录的值显示“未知”</span></section>{pendingTotal>0&&<div className="notice">正在导入本机历史记录：当前显示 {sessions.length} 个会话，还有 {pendingTotal.toLocaleString('zh-CN')} 条待处理。页面每 15 秒自动更新。</div>}{sources.length>0&&sessions.length===0&&<div className="notice">正在扫描已发现的来源。首次导入可能需要几分钟，页面会自动更新。</div>}{sources.length===0&&<div className="notice">未发现 Agent 数据来源。Windows 本机版启动后会自动检测 Codex 和 Hermes；其他电脑可在“设备与设置”中配对。</div>}{autoDate&&<div className="notice">今天暂无已采集活动，已显示最近有记录的 {date}。<button className="textButton" onClick={()=>{setDateManual(true);setAutoDate(false);setDate(dateLocal())}}>返回今天 →</button></div>}{latestDay&&latestDay!==date&&metric(stats,'run_count')===0&&metric(stats,'human_input_chars')===0&&<div className="notice">这一天暂无活动。最近的会话记录在 {latestDay}。<button className="textButton" onClick={()=>{setDateManual(true);setAutoDate(false);setDate(latestDay)}}>查看最近记录 →</button></div>}{(metric(stats,'run_count')||0)>0&&metric(stats,'input_tokens')===null&&metric(stats,'output_tokens')===null&&<div className="notice">该日期有活动，但来源没有提供可按请求拆分的输入/输出 Token，因此显示“未知”。若有“累计计数差分”，可作为单独证据查看，不能与输入/输出相加。</div>}<section className="cards"><Card title="活动时间" value={num(metric(stats,'active_wall_ms')===null?null:Math.round((metric(stats,'active_wall_ms')||0)/60000),' 分钟')} hint="并行轮次按时间并集计算"/><Card title="累计执行" value={num(metric(stats,'settled_duration_ms')===null?null:Math.round((metric(stats,'settled_duration_ms')||0)/60000),' 分钟')} hint="已结算顶层轮次，并行分别计入"/><Card title="完成轮次" value={num(metric(stats,'completed_count'))} hint="仅已发现的轮次"/><Card title="人类输入" value={num(metric(stats,'human_input_chars'),' 字')} hint="Unicode 字符数"/><Card title="耗时 P95" value={num(metric(stats,'duration_p95_ms')===null?null:Math.round((metric(stats,'duration_p95_ms')||0)/1000),' 秒')} hint="仅有可信边界的完成轮次"/><Card title="输入 Token" value={num(metric(stats,'input_tokens'))} hint="请求级输入证据"/><Card title="输出 Token" value={num(metric(stats,'output_tokens'))} hint="请求级输出证据"/><Card title="累计计数差分" value={num(metric(stats,'counter_total_tokens'))} hint="仅同日可确认增量，不与上方相加"/><Card title="来源" value={num(sources.length)} hint="Codex / Hermes 已登记来源"/></section><section className="columns"><div className="panel"><div className="panelHead"><h2>最近会话</h2><button className="textButton" onClick={()=>setView('sessions')}>查看全部 →</button></div>{sessions.length? sessions.slice(0,8).map(s=><SessionRow key={s.id} s={s} onClick={()=>{setSelected(s.id);setView('sessions')}}/>):<Empty text={sources.length?'尚无已索引活动。首次扫描可能需要几分钟。':'尚无活动来源'}/>}</div><div className="panel"><div className="panelHead"><h2>设备状态</h2><button className="textButton" onClick={()=>setView('devices')}>管理 →</button></div>{devices.length?devices.map(d=><div className="deviceRow" key={d.id}><span className="deviceIcon">⌘</span><div><b>{d.name}</b><small>{d.os} · {d.last_heartbeat?'最后在线 '+time(d.last_heartbeat):'等待首次心跳'}</small></div><span className="badge">{d.pending_count} 待传</span></div>):<Empty text="尚未配对设备"/>}</div></section></>}
-    {view==='overview'&&<TimelinePanel day={date} onSelect={id=>{setSelected(id);setView('sessions')}}/>}
+    {view==='overview'&&<Overview date={date} onDate={setDate} rangeDays={rangeDays} onRange={setRangeDays} tz={tz} onTz={setTz} deviceId={deviceId} onDevice={setDeviceId} agent={agent} onAgent={setAgent} model={model} onModel={setModel} models={models} metrics={stats} trend={trend} comparison={comparison} devices={devices} sessions={sessions} sourcesCount={sources.length} pendingTotal={pendingTotal} refreshTick={refreshTick} onSelect={id=>{setSelected(id);setView('sessions')}} onSessions={()=>setView('sessions')} onDevices={()=>setView('devices')}/>}
     {view==='sessions'&&<div className="three"><section className="listPane"><form className="search" onSubmit={doSearch}><input aria-label="搜索会话" placeholder="搜索标题、路径或已保存正文" value={query} onChange={e=>setQuery(e.target.value)}/><button>搜索</button></form>{search&&<><div className="listTitle">搜索结果 <button className="textButton" onClick={()=>setSearch(null)}>清除</button></div>{search.items.length?search.items.map(r=><button className="result" key={r.id} onClick={()=>setSelected(r.session_id)}><b>{r.title||'未命名会话'}</b><span>{r.excerpt}</span></button>):<Empty text="没有匹配的会话"/>}</>}<div className="listTitle">所有会话 · 已加载 {sessions.length}</div>{sessions.length?sessions.map(s=><SessionRow key={s.id} s={s} active={selected===s.id} onClick={()=>setSelected(s.id)}/>):<Empty text="还没有会话；首次扫描可能需要几分钟。"/>}{sessionCursor&&<button className="loadMore" onClick={()=>void moreSessions()}>加载更多会话</button>}</section><section className="detailPane">{detail?<><div className="detailHead"><div className="eyebrow">{detail.session.agent.toUpperCase()} · {detail.session.profile}</div><h2>{sessionLabel(detail.session)}</h2><p className="muted">{detail.session.cwd||'未记录工作目录'}</p></div><div className="detailTabs"><span>对话 {detail.items.length}{detail.next_cursor?'＋':''}</span><span>轮次 {detail.runs.length}</span><span>文件 {detail.files.length}</span></div><div className="timeline">{detail.items.map(m=><article className="message" key={m.id}><div className="messageMeta"><b>{m.role==='user'?'用户':m.role==='assistant'?'Agent':m.role}</b><time>{time(m.occurred_at)}</time></div>{m.body?<p>{m.body}</p>:<p className="muted">{m.content_state==='stats_only'?'仅统计：正文未采集':'正文未保存'}{m.source_char_count!==null?` · 原文 ${m.source_char_count} 字`:''}</p>}</article>)}{detail.items.length===0&&<Empty text="此会话尚无可显示的消息"/>}{detail.next_cursor&&<button className="loadMore" onClick={()=>void moreMessages()}>加载更多消息</button>}</div></>:<div className="selectPrompt">从左侧选择会话，查看对话、轮次与文件证据。</div>}</section><aside className="contextPane"><h3>活动证据</h3>{detail&&<HandoffPanel key={detail.session.id} sessionId={detail.session.id} sourceDeviceId={detail.session.device_id} devices={devices} csrf={csrf}/>}{detail?<><div className="contextLabel">轮次</div>{detail.runs.map(r=><div className="run" key={r.id}><b>{r.status}</b><small>{r.model||'模型未知'}</small><small>{time(r.start_at)} · {r.duration_ms===null?'耗时未知':`${Math.round(r.duration_ms/1000)} 秒`}</small></div>)}<div className="contextLabel">关联文件</div>{detail.files.map((f,i)=><div className="file" key={i}>{String(f.relative_path||f.native_path||'未知路径')}</div>)}</>:<p className="muted">选择会话后显示</p>}</aside></div>}
     {view==='devices'&&<div className="settingsGrid">
       <section className="panel"><h2>已配对设备</h2><p className="muted">本机启动时自动配对并采集。</p>
@@ -90,8 +95,7 @@ function App(){
     </div>}
     </main></div>
 }
-function Card({title,value,hint}:{title:string,value:string,hint:string}){return <div className="card"><small>{title}</small><strong>{value}</strong><span>{hint}</span></div>}
 function Empty({text}:{text:string}){return <div className="empty">{text}</div>}
-function SessionRow({s,onClick,active}:{s:Session,onClick:()=>void,active?:boolean}){return <button className={'sessionRow '+(active?'selected':'')} onClick={onClick}><span className="agentGlyph">{s.agent==='codex'?'C':'H'}</span><span className="sessionText"><b>{sessionLabel(s)}</b><small>{s.device_name} · {s.agent} · {time(s.last_activity)}</small></span><span className="count">{s.message_count}</span></button>}
+function SessionRow({s,onClick,active}:{s:Session,onClick:()=>void,active?:boolean}){return <button className={'sessionRow '+(active?'selected':'')} onClick={onClick}><span className="agentGlyph">{s.agent==='codex'?'C':'H'}</span><span className="sessionText"><b>{sessionLabel(s)}</b><small>{projectLabel(s)?`工作目录：${projectLabel(s)} · `:''}{s.device_name} · {s.agent} · {time(s.last_activity)}</small></span><span className="count">{s.message_count}</span></button>}
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App/></React.StrictMode>)

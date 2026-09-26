@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
@@ -30,7 +31,7 @@ from .auth import (
     set_owner_cookie,
     token_hash,
 )
-from .codec import sha256
+from .codec import day_bounds_utc_ms, sha256
 from .db import Database
 from .filecheck import create_job, jobs_for_collector, record_result
 from .handoff import create_handoff, get_handoff, link_continuation
@@ -38,7 +39,7 @@ from .ingest import receive_batch, resolve_quarantine, server_epoch
 from .local import set_local_source_policy
 from .models import Batch
 from .resources import record_samples
-from .stats import calculate, timeline
+from .stats import calculate, metric_contributors, timeline
 
 
 class Credentials(BaseModel):
@@ -136,7 +137,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     path = Path(db_path or os.environ.get("AWB_DB_PATH", "./data/agent-workbench.db"))
     db = Database(path)
     db.initialize()
-    app = FastAPI(title="Agent Workbench", version="0.2.2")
+    app = FastAPI(title="Agent Workbench", version="0.2.3")
     app.state.db = db
     app.state.desktop_mode = desktop_mode
     app.state.shutdown_callback = None
@@ -174,7 +175,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     def ready():
         with db.read() as conn:
             version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
-        return {"status": "ready", "schema_version": version, "app_version": "0.2.2"}
+        return {"status": "ready", "schema_version": version, "app_version": "0.2.3"}
 
     @app.post("/auth/login")
     def auth_login(body: Credentials, request: Request, response: Response):
@@ -348,35 +349,71 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
         return {"items": [dict(r) for r in rows], "quarantined_count": quarantines}
 
     @app.get("/v1/stats")
-    def stats(day: str, tz: str = "Asia/Hong_Kong", device_ids: list[str] = Query(default=[]),
+    def stats(day: str, through: str | None = None, tz: str = "Asia/Hong_Kong", device_ids: list[str] = Query(default=[]),
               agent_ids: list[str] = Query(default=[]), model_ids: list[str] = Query(default=[]),
               _: str = Depends(require_owner)):
         try:
-            return calculate(db, day, tz, device_ids, agent_ids, model_ids)
+            return calculate(db, day, tz, device_ids, agent_ids, model_ids, through)
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, "Invalid day or timezone") from exc
 
     @app.get("/v1/timeline")
-    def daily_timeline(day: str, tz: str = "Asia/Hong_Kong", _: str = Depends(require_owner)):
+    def daily_timeline(day: str, tz: str = "Asia/Hong_Kong", device_ids: list[str] = Query(default=[]),
+                       agent_ids: list[str] = Query(default=[]), model_ids: list[str] = Query(default=[]),
+                       _: str = Depends(require_owner)):
         try:
-            return timeline(db, day, tz)
+            return timeline(db, day, tz, device_ids, agent_ids, model_ids)
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, "Invalid day or timezone") from exc
 
+    @app.get("/v1/models")
+    def models(_: str = Depends(require_owner)):
+        with db.read() as conn:
+            rows = conn.execute("""SELECT DISTINCT model FROM runs WHERE model IS NOT NULL
+                UNION SELECT DISTINCT model FROM usage_observations WHERE model IS NOT NULL
+                ORDER BY model""").fetchall()
+        return {"items": [r[0] for r in rows]}
+
+    @app.get("/v1/stats/contributors")
+    def stats_contributors(metric_id: str, day: str, through: str | None = None, tz: str = "Asia/Hong_Kong",
+                           device_ids: list[str] = Query(default=[]), agent_ids: list[str] = Query(default=[]),
+                           model_ids: list[str] = Query(default=[]), _: str = Depends(require_owner)):
+        try:
+            return metric_contributors(db, metric_id, day, tz, through, device_ids, agent_ids, model_ids)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(422, "Invalid metric, day or timezone") from exc
+
     @app.get("/v1/sessions")
     def sessions(activity_from: str | None = None, activity_to: str | None = None,
-                 device_id: str | None = None, agent: str | None = None,
+                 activity_day: str | None = None, activity_through: str | None = None,
+                 tz: str = "Asia/Hong_Kong",
+                 device_id: str | None = None, agent: str | None = None, model: str | None = None,
                  cursor: str | None = None, limit: int = Query(50, ge=1, le=200),
                  _: str = Depends(require_owner)):
-        filters = {"from": activity_from, "to": activity_to, "device": device_id, "agent": agent}
+        if activity_day:
+            try:
+                lower_ms, _ = day_bounds_utc_ms(activity_day, tz)
+                _, upper_ms = day_bounds_utc_ms(activity_through or activity_day, tz)
+                activity_from = datetime.fromtimestamp(lower_ms / 1000, timezone.utc).isoformat().replace("+00:00", "Z")
+                activity_to = datetime.fromtimestamp(upper_ms / 1000, timezone.utc).isoformat().replace("+00:00", "Z")
+            except (ValueError, KeyError) as exc:
+                raise HTTPException(422, "Invalid activity date or timezone") from exc
+        filters = {"from": activity_from, "to": activity_to, "device": device_id, "agent": agent, "model": model}
         sort, anchor = _page_cursor(cursor, filters)
         clauses = ["s.archived=0"]
         params: list = []
-        for field, value, op in (("s.last_activity", activity_from, ">="), ("s.last_activity", activity_to, "<"),
-                                 ("s.device_id", device_id, "="), ("s.agent", agent, "=")):
+        if activity_from or activity_to:
+            clauses.append("EXISTS (SELECT 1 FROM runs ar WHERE ar.session_id=s.id AND ar.start_at>=? AND ar.start_at<?) OR EXISTS (SELECT 1 FROM messages am WHERE am.session_id=s.id AND am.occurred_at>=? AND am.occurred_at<?)")
+            clauses[-1] = "(" + clauses[-1] + ")"
+            lower, upper = activity_from or "0000-01-01T00:00:00Z", activity_to or "9999-12-31T23:59:59Z"
+            params.extend((lower, upper, lower, upper))
+        for field, value, op in (("s.device_id", device_id, "="), ("s.agent", agent, "=")):
             if value:
                 clauses.append(f"{field}{op}?")
                 params.append(value)
+        if model:
+            clauses.append("EXISTS (SELECT 1 FROM runs mr WHERE mr.session_id=s.id AND mr.model=? AND mr.model_attribution IN ('single','reported'))")
+            params.append(model)
         if cursor:
             clauses.append("(COALESCE(s.last_activity,'')<? OR (COALESCE(s.last_activity,'')=? AND s.id<?))")
             params.extend((sort, sort, anchor))

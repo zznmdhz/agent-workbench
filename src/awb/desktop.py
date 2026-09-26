@@ -57,7 +57,7 @@ def _is_workbench(url: str) -> bool:
         with httpx.Client(timeout=1) as client:
             result = client.get(url + "/health/ready")
         body = result.json()
-        return result.status_code == 200 and body.get("status") == "ready" and body.get("app_version") == "0.2.2"
+        return result.status_code == 200 and body.get("status") == "ready" and body.get("app_version") == "0.2.3"
     except (httpx.HTTPError, ValueError):
         return False
 

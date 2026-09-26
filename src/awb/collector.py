@@ -117,6 +117,19 @@ class Outbox:
         with closing(self.connect()) as db:
             return db.execute("SELECT * FROM cursors WHERE source_id=? AND locator=?", (source_id, locator)).fetchone()
 
+    def backfill_codex_token_components_once(self, source_ids: list[str]) -> None:
+        """Re-read Codex logs once after the component-counter collector upgrade.
+
+        Existing fact IDs stay deduplicated; only new component observations enter the queue.
+        The cursor reset and marker commit together so a crash cannot skip the backfill.
+        """
+        with closing(self.connect()) as db:
+            db.execute("BEGIN IMMEDIATE")
+            if not db.execute("SELECT 1 FROM meta WHERE key='codex_token_components_v1'").fetchone():
+                db.executemany("UPDATE cursors SET offset=0 WHERE source_id=?", [(sid,) for sid in source_ids])
+                db.execute("INSERT INTO meta(key,value) VALUES('codex_token_components_v1',?)", (_now(),))
+            db.commit()
+
     def pending(self, limit: int = 100) -> list[dict]:
         with closing(self.connect()) as db:
             rows = db.execute("SELECT * FROM outbox WHERE state='pending' ORDER BY seq LIMIT ?", (limit,)).fetchall()
@@ -233,6 +246,15 @@ def scan_codex(source: dict, outbox: Outbox, device_id: str) -> int:
                                                 {"usage_key": "codex_total", "quantity_semantics": "cumulative_snapshot",
                                                  "coverage_scope": "session", "counter_id": session_id, "epoch_id": session_id,
                                                  "source_time": at, "total_tokens": total}, device_id, source.get("environment_id")))
+                    for source_field, usage_key in (("input_tokens", "codex_input"),
+                                                    ("output_tokens", "codex_output")):
+                        component = totals.get(source_field)
+                        if isinstance(component, int) and component >= 0:
+                            facts.append(make_event(sid, session_id, "usage.observed", f"{usage_key}:{before}", "1", before, at,
+                                                    {"usage_key": usage_key, "quantity_semantics": "cumulative_snapshot",
+                                                     "coverage_scope": "session", "counter_id": session_id, "epoch_id": session_id,
+                                                     "source_time": at, "total_tokens": component},
+                                                    device_id, source.get("environment_id")))
         count += outbox.append(sid, locator, offset, fingerprint, session_id, facts)
     return count
 
@@ -341,6 +363,8 @@ def send_pending(config: dict, outbox: Outbox) -> dict:
 
 
 def run_cycle(config: dict, outbox: Outbox) -> dict:
+    outbox.backfill_codex_token_components_once(
+        [source["id"] for source in config.get("sources", []) if source.get("agent") == "codex"])
     added = 0
     errors = {}
     for source in config.get("sources", []):

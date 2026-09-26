@@ -1,0 +1,27 @@
+.dashboardFilters{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:18px;padding:14px;background:#fff;border:1px solid #e8edf2;border-radius:11px;color:#536176;font-size:12px}
+.dashboardFilters label{display:flex;align-items:center;gap:6px;white-space:nowrap}
+.dashboardFilters input,.dashboardFilters select{border:1px solid #dce3ec;border-radius:7px;padding:8px;background:#fff;color:#273448;max-width:165px}
+.rangeButtons{display:flex;gap:4px;padding:3px;background:#eef2f7;border-radius:8px}
+.rangeButtons button{border:0;background:transparent;color:#5e6f84;padding:7px 11px;border-radius:6px;font-size:12px}
+.rangeButtons button.active{background:#fff;color:#2459c9;box-shadow:0 1px 5px #233a551c;font-weight:700}
+.metricCard{display:block;text-align:left;cursor:pointer;font:inherit;color:inherit;width:100%}
+.metricCard:hover{border-color:#aac7f5;box-shadow:0 6px 17px #284a7617}
+.metricCard em{display:block;margin-top:14px;font-size:11px;color:#386ce3;font-style:normal}
+.deviceButton{width:100%;background:transparent;border:0;text-align:left;color:inherit}
+.deviceButton>span:nth-child(2){min-width:0;flex:1}
+.trendPanel,.comparePanel{margin-top:18px}
+.trendRows{display:grid;gap:6px}
+.trendRow{display:grid;grid-template-columns:64px minmax(100px,1fr) 62px 140px;gap:12px;align-items:center;width:100%;padding:8px;border:0;border-radius:6px;background:transparent;text-align:left;color:#516278;font-size:12px}
+.trendRow:hover,.compareRow:not(.head):hover{background:#f4f8ff}
+.trendTrack{height:11px;background:#edf2f9;border-radius:8px;overflow:hidden}
+.trendTrack span{display:block;height:100%;background:#5387e8;border-radius:8px}
+.trendRow small{color:#92a0b0;font-size:11px}
+.compareTable{overflow:auto}
+.compareRow{display:grid;grid-template-columns:minmax(130px,1.4fr) repeat(5,minmax(90px,1fr));gap:10px;min-width:700px;width:100%;padding:12px 9px;border:0;border-bottom:1px solid #edf0f4;background:transparent;text-align:left;color:#4f6074;font-size:12px}
+.compareRow.head{font-weight:700;color:#8090a3}
+.metricOverlay{position:fixed;inset:0;display:grid;place-items:center;background:#15243a66;z-index:10;padding:20px}
+.metricDialog{width:min(490px,100%);background:#fff;border-radius:13px;padding:28px;box-shadow:0 18px 45px #14223833;position:relative}
+.metricDialog h2{font-size:21px;margin:9px 0}.metricDialog strong{font-size:30px;color:#1d2a3c}.metricDialog p{font-size:13px;color:#526176;line-height:1.7}
+.dialogClose{position:absolute;right:18px;top:14px;background:transparent;border:0;color:#778599;font-size:24px}
+.metricDialog{max-height:min(88vh,850px);overflow:auto}.metricDialog h3{font-size:14px;margin:20px 0 8px}.contributorList{max-height:280px;overflow:auto;border-top:1px solid #e9edf3}.contributorList button{display:flex;justify-content:space-between;gap:12px;align-items:center;width:100%;text-align:left;background:transparent;border:0;border-bottom:1px solid #edf0f4;padding:11px 2px;color:#324155}.contributorList button:hover{background:#f4f8ff}.contributorList b,.contributorList small{display:block}.contributorList small{font-size:11px;color:#8998aa;margin-top:4px}.contributorList strong{white-space:nowrap;font-size:13px;color:#386ce3}
+@media(max-width:800px){.trendRow{grid-template-columns:55px 1fr 55px}.trendRow small{display:none}.dashboardFilters{align-items:flex-start}}

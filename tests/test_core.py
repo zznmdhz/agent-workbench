@@ -92,6 +92,29 @@ def test_outbox_repeated_scan_has_no_sequence_holes(tmp_path: Path):
     assert all("hello" not in row["event_json"] for row in queue.pending())
 
 
+def test_codex_token_components_backfill_without_duplicate_totals(tmp_path: Path):
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    log = sessions / "sample.jsonl"
+    with log.open("w", encoding="utf-8") as f:
+        f.write(json.dumps({"type": "session_meta", "timestamp": "2026-09-23T01:00:00Z",
+                            "payload": {"id": "s1", "cwd": "/tmp/test"}}) + "\n")
+        for index, (input_tokens, output_tokens) in enumerate(((100, 20), (130, 35))):
+            f.write(json.dumps({"type": "event_msg", "timestamp": f"2026-09-23T01:00:0{index+1}Z",
+                                "payload": {"type": "token_count", "info": {"total_token_usage": {
+                                    "input_tokens": input_tokens, "output_tokens": output_tokens,
+                                    "total_tokens": input_tokens + output_tokens}}}}) + "\n")
+    queue = Outbox(tmp_path / "outbox.db")
+    source = {"id": str(uuid4()), "agent": "codex", "root": str(sessions), "content_policy": "stats_only"}
+    device = str(uuid4())
+    assert scan_codex(source, queue, device) == 7
+    queue.backfill_codex_token_components_once([source["id"]])
+    assert scan_codex(source, queue, device) == 0
+    assert len(queue.pending()) == 7
+    queue.backfill_codex_token_components_once([source["id"]])
+    assert scan_codex(source, queue, device) == 0
+
+
 def test_stat_primitives_do_not_invent_daily_usage():
     assert union_ms([(0, 10), (5, 20), (30, 40)]) == 30
     assert ack_prefix(0, {1: "accepted", 2: "quarantined_pending", 3: "accepted"}) == 1

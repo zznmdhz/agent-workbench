@@ -68,9 +68,55 @@ def test_terminal_before_start_backfills_duration_and_stats_exclude_child(tmp_pa
     assert metrics["settled_duration_ms"] == 1_200_000
     assert metrics["active_wall_ms"] == 900_000
     assert metrics["duration_p95_ms"] == 600_000
+    assert result["daily_trend"][0]["runs"] == 2
+    assert result["device_comparison"][0]["active_wall_ms"] == 900_000
+    assert calculate(db, "2026-09-22", "Asia/Hong_Kong", through="2026-09-23")["metrics"][2]["value"] == 2
+    initialize_owner(db, "correct-horse-battery-staple")
+    client = TestClient(create_app(tmp_path / "server.db"))
+    assert client.post("/auth/login", json={"password": "correct-horse-battery-staple"}).status_code == 200
+    assert client.get("/v1/stats", params={"day": "2026-09-23", "through": "2026-09-23"}).status_code == 200
+    assert client.get("/v1/timeline", params={"day": "2026-09-23", "device_ids": device}).json()["items"]
+    evidence = client.get("/v1/stats/contributors", params={"metric_id": "settled_duration_ms", "day": "2026-09-23"}).json()
+    assert evidence["items"][0]["amount"] == 1_200_000
+    assert client.get("/v1/sessions", params={"activity_day": "2026-09-23", "device_id": device}).json()["items"]
+    assert not client.get("/v1/sessions", params={"activity_day": "2026-09-22", "device_id": device}).json()["items"]
     with db.read() as conn:
         a = conn.execute("SELECT start_at,end_at,status,duration_ms FROM runs WHERE native_id='a'").fetchone()
     assert tuple(a) == ("2026-09-23T01:00:00.000Z", "2026-09-23T01:10:00.000Z", "completed", 600_000)
+
+
+def test_cumulative_components_are_separate_and_date_attributed(tmp_path: Path):
+    db = create_app(tmp_path / "server.db").state.db
+    device, source = str(uuid4()), str(uuid4())
+    with db.tx() as conn:
+        conn.execute("INSERT INTO devices(id,name,os,environment,token_hash,registered_at) VALUES(?,?,?,?,?,?)",
+                     (device, "Test", "Windows", "test", str(uuid4()), "2026-09-23T00:00:00Z"))
+        conn.execute("INSERT INTO sources(id,device_id,agent,profile,created_at) VALUES(?,?,?,?,?)",
+                     (source, device, "codex", "default", "2026-09-23T00:00:00Z"))
+    for index, (at, total, inp, out) in enumerate((
+        ("2026-09-23T01:00:00Z", 120, 100, 20),
+        ("2026-09-23T01:05:00Z", 165, 130, 35),
+        ("2026-09-24T01:00:00Z", 200, 150, 50),
+    )):
+        for key, amount in (("codex_total", total), ("codex_input", inp), ("codex_output", out)):
+            event = make_event(source, "session", "usage.observed", f"{key}:{index}", "1", index, at,
+                               {"usage_key": key, "quantity_semantics": "cumulative_snapshot",
+                                "coverage_scope": "session", "counter_id": "session", "epoch_id": "session",
+                                "source_time": at, "total_tokens": amount}, device, None)
+            with db.tx() as conn:
+                conn.execute("""INSERT INTO events(event_id,body_hash,source_id,native_session_id,fact_kind,
+                    native_fact_id,revision_key,source_order,occurred_at,content_json,received_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                    (event["event_id"], event["body_hash"], source, "session", "usage.observed",
+                     f"{key}:{index}", "1", index, at, json.dumps(event["content"]), at))
+                project(conn, event)
+    day = {m["id"]: m["value"] for m in calculate(db, "2026-09-23", "Asia/Hong_Kong")["metrics"]}
+    assert day["counter_total_tokens"] == 45
+    assert day["counter_input_tokens"] == 30
+    assert day["counter_output_tokens"] == 15
+    assert day["input_tokens"] is None
+    next_day = {m["id"]: m["value"] for m in calculate(db, "2026-09-24", "Asia/Hong_Kong")["metrics"]}
+    assert next_day["counter_total_tokens"] is None
 
 
 def test_search_finds_stats_only_session_by_title_and_path(tmp_path: Path):

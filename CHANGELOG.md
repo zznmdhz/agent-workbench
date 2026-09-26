@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.3 — Dashboard usability and Token evidence
+
+- Fix blue-filled session and timeline rows caused by a broad button selector.
+- Add one-day and 7/10/15-day views, linked device/Agent/model/timezone filters, daily trends, device comparison, and bounded timelines.
+- Make every main metric card open its definition, evidence coverage, and related sessions.
+- Label untitled sessions clearly and identify former title-like directory names as working directories.
+- Backfill Codex cumulative input/output counters from read-only source logs, assigning only same-day counter intervals; keep opening balances and cross-day intervals unallocated.
+
 ## 0.2.2 — First import visibility
 
 - Refresh the overview and device state every 15 seconds while the workbench is open, so newly imported history appears without a manual reload.
