@@ -6,13 +6,13 @@
 
 ## 状态
 
-**v0.2.0 是 Windows 单机安装版。** 启动后自动登记本机 Codex/Hermes 来源并以仅统计策略采集；会话、搜索、统计、来源状态和交接包可在网页使用。Windows 安装、登录与本机采集已测试。Mac 采集、NAS 容器和真实双机接续仍需目标环境，因此整个跨机 PRD 尚未验收。详见[Windows 使用说明](docs/WINDOWS.md)、[验证记录](docs/verification/README.md)和[剩余工作](docs/project/ROADMAP.md)。
+**v0.2.1 是 Windows 单机安装版。** 启动后自动登记本机 Codex/Hermes 来源并以仅统计策略采集；会话、搜索、统计、来源状态和交接包可在网页使用。Windows 安装、登录与本机采集已测试。Mac 采集、NAS 容器和真实双机接续仍需目标环境，因此整个跨机 PRD 尚未验收。详见[Windows 使用说明](docs/WINDOWS.md)、[验证记录](docs/verification/README.md)和[剩余工作](docs/project/ROADMAP.md)。
 
 ## 本地开发
 
 ### Windows 安装版
 
-[下载 Windows v0.2.0 安装程序](https://github.com/zznmdhz/agent-workbench/releases/tag/v0.2.0)。从开始菜单打开，首次在启动窗口设置管理员密码；工作台会自动打开浏览器、发现本机来源并开始仅统计采集。无需手动配对或复制来源 ID。另提供无需安装的便携 ZIP。数据与升级说明见 [Windows 使用说明](docs/WINDOWS.md)。
+[下载 Windows v0.2.1 安装程序](https://github.com/zznmdhz/agent-workbench/releases/tag/v0.2.1)。从开始菜单打开后，浏览器会自动打开，首次在网页创建管理员密码并自动登录；工作台会发现本机来源并开始仅统计采集。无需手动配对或复制来源 ID。另提供无需安装的便携 ZIP。数据与升级说明见 [Windows 使用说明](docs/WINDOWS.md)。
 
 ### 从源码运行
 
@@ -33,7 +33,7 @@ pnpm --dir web build
 uv run awb open --db .local/server.db
 ```
 
-命令会在首次运行时引导设置密码并打开浏览器。然后在网页的“设备与设置”生成一次性配对码，再在采集机器运行：
+这是供开发者使用的命令行模式，首次运行会在终端引导设置密码；普通用户请使用上方 Windows 安装版，在网页完成设置。然后在网页的“设备与设置”生成一次性配对码，再在采集机器运行：
 
 ```powershell
 uv run awb pair http://127.0.0.1:8765 123456789

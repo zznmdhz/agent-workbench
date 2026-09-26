@@ -2,9 +2,11 @@
 
 ## 安装
 
-从 [GitHub Releases](https://github.com/zznmdhz/agent-workbench/releases) 下载 `AgentWorkbench-Setup-0.2.0-Windows-x64.exe`。安装程序使用当前用户权限，不需要管理员权限。安装后从开始菜单打开 **Agent Workbench**。首次启动会在窗口中要求设置至少 12 位管理员密码，然后打开 `http://127.0.0.1:8765/`。运行期间保持启动窗口开启；再次点击快捷方式会打开已有工作台。
+从 [GitHub Releases](https://github.com/zznmdhz/agent-workbench/releases/tag/v0.2.1) 下载 `AgentWorkbench-Setup-0.2.1-Windows-x64.exe`。安装程序使用当前用户权限，不需要管理员权限。安装后从开始菜单打开 **Agent Workbench**，默认浏览器会打开 `http://127.0.0.1:8765/`。首次使用直接在网页创建至少 12 位管理员密码，完成后自动进入工作台；之后打开会显示网页登录。程序在后台运行，网页左侧的“关闭工作台”可停止服务和采集。再次点击快捷方式会打开已有工作台。
 
 首次启动自动检测本机的 Codex 会话目录和 Hermes 数据库，并以**仅统计**策略只读采集。历史数据较多时，首次导入需要几分钟；“设备与设置”显示来源、最近扫描和待传队列。总览默认查看香港时区的当天，若只有历史记录，页面会提供最近有记录日期的入口。
+
+如果升级后看到登录页，说明这台电脑已有管理员密码，原密码会继续有效。忘记密码时，先在登录页点击“关闭工作台”，然后从开始菜单打开“重设管理员密码”。程序会确认是否清除旧密码与网页登录状态，随后在网页重新创建密码。设备、会话和统计数据会保留。
 
 如希望查看今后的对话正文，在“设备与设置”将本机来源切换为“保存脱敏后的正文”。此设置只影响**切换后产生的新记录**，不会回填以前按仅统计策略采集的正文。脱敏规则无法保证去掉所有隐私内容，开启前请自行判断。默认保持仅统计。
 
@@ -15,12 +17,12 @@
 在 PowerShell 中运行以下命令生成一致性备份；可以在工作台运行时执行：
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\AgentWorkbench\AgentWorkbench.exe" backup --db "$env:LOCALAPPDATA\AgentWorkbench\data\agent-workbench.db" --output "$env:USERPROFILE\Documents\agent-workbench-backup.zip"
+& "$env:LOCALAPPDATA\Programs\AgentWorkbench\AgentWorkbenchCLI.exe" backup --db "$env:LOCALAPPDATA\AgentWorkbench\data\agent-workbench.db" --output "$env:USERPROFILE\Documents\agent-workbench-backup.zip"
 ```
 
-恢复时先关闭工作台，使用 `restore-to <备份 ZIP> <空目录>` 校验并解包，再根据[运行手册](RUNBOOK.md)核对恢复代际、设备队列与备份后的数据缺口。恢复备份不代表自动补回已经从原始来源和 outbox 中删除的事件。
+恢复时先在网页点击“关闭工作台”，使用 `AgentWorkbenchCLI.exe restore-to <备份 ZIP> <空目录>` 校验并解包，再根据[运行手册](RUNBOOK.md)核对恢复代际、设备队列与备份后的数据缺口。恢复备份不代表自动补回已经从原始来源和 outbox 中删除的事件。
 
-从旧便携预览版迁移：先关闭旧版和新版的所有窗口；将旧版解压目录的 `data` 文件夹完整复制到 `%LOCALAPPDATA%\AgentWorkbench\data`，覆盖前先备份已有的新版本数据。数据库、`collector.json` 和 `outbox.db` 必须一起迁移。启动新版后核对设备、来源和待传状态，再删除旧版目录。不要让两套程序同时使用同一份数据。
+从旧便携预览版迁移：先关闭旧版服务与新版工作台；将旧版解压目录的 `data` 文件夹完整复制到 `%LOCALAPPDATA%\AgentWorkbench\data`，覆盖前先备份已有的新版本数据。数据库、`collector.json` 和 `outbox.db` 必须一起迁移。启动新版后核对设备、来源和待传状态，再删除旧版目录。不要让两套程序同时使用同一份数据。升级 v0.2.0 安装版时，旧密码与数据会保留，无需重新创建密码；如果旧版仍占用 8765 端口，请先关闭旧版命令窗口。
 
 ## 当前范围
 

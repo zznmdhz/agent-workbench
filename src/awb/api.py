@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from .auth import (
     check_rate,
     clear_failures,
+    initialize_owner,
     issue_pair_code,
     login,
     now_iso,
@@ -42,6 +43,11 @@ from .stats import calculate, timeline
 
 class Credentials(BaseModel):
     password: str
+
+
+class SetupCredentials(BaseModel):
+    password: str
+    confirmation: str
 
 
 class PairRequest(BaseModel):
@@ -126,12 +132,27 @@ def _cursor(sort: str, ident: str, filters: dict) -> str:
     return base64.urlsafe_b64encode(json.dumps(value, separators=(",", ":")).encode()).decode().rstrip("=")
 
 
-def create_app(db_path: str | Path | None = None) -> FastAPI:
+def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False) -> FastAPI:
     path = Path(db_path or os.environ.get("AWB_DB_PATH", "./data/agent-workbench.db"))
     db = Database(path)
     db.initialize()
-    app = FastAPI(title="Agent Workbench", version="0.2.0")
+    app = FastAPI(title="Agent Workbench", version="0.2.1")
     app.state.db = db
+    app.state.desktop_mode = desktop_mode
+    app.state.shutdown_callback = None
+
+    def owner_exists() -> bool:
+        with db.read() as conn:
+            return conn.execute("SELECT 1 FROM owner WHERE id=1").fetchone() is not None
+
+    def require_local_desktop(request: Request) -> None:
+        if not app.state.desktop_mode or not request.client or request.client.host not in {"127.0.0.1", "::1"}:
+            raise HTTPException(403, "Available only in the local desktop app")
+        if request.url.hostname not in {"127.0.0.1", "localhost", "::1"}:
+            raise HTTPException(403, "Invalid local host")
+        origin = request.headers.get("origin")
+        if origin and origin != str(request.base_url).rstrip("/"):
+            raise HTTPException(403, "Invalid origin")
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -153,7 +174,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     def ready():
         with db.read() as conn:
             version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
-        return {"status": "ready", "schema_version": version}
+        return {"status": "ready", "schema_version": version, "app_version": "0.2.1"}
 
     @app.post("/auth/login")
     def auth_login(body: Credentials, request: Request, response: Response):
@@ -168,6 +189,45 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         set_owner_cookie(response, token, request)
         return {"authenticated": True, "csrf": csrf}
 
+    @app.get("/auth/setup-status")
+    def setup_status():
+        return {"needs_setup": not owner_exists(), "web_setup_available": desktop_mode}
+
+    @app.post("/auth/setup")
+    def auth_setup(body: SetupCredentials, request: Request, response: Response):
+        require_local_desktop(request)
+        if owner_exists():
+            raise HTTPException(409, "Owner account already exists")
+        if body.password != body.confirmation:
+            raise HTTPException(422, "Passwords do not match")
+        if len(body.password) < 12:
+            raise HTTPException(422, "Password must have at least 12 characters")
+        try:
+            initialize_owner(db, body.password)
+        except ValueError as exc:
+            raise HTTPException(409, "Owner account already exists") from exc
+        token, csrf = login(db, body.password)
+        set_owner_cookie(response, token, request)
+        return {"authenticated": True, "csrf": csrf}
+
+    @app.post("/auth/cancel-setup")
+    def cancel_setup(request: Request, background_tasks: BackgroundTasks):
+        require_local_desktop(request)
+        if owner_exists():
+            raise HTTPException(409, "Owner account already exists")
+        if app.state.shutdown_callback is None:
+            raise HTTPException(503, "Desktop shutdown unavailable")
+        background_tasks.add_task(app.state.shutdown_callback)
+        return {"stopping": True}
+
+    @app.post("/auth/close-local")
+    def close_local(request: Request, background_tasks: BackgroundTasks):
+        require_local_desktop(request)
+        if app.state.shutdown_callback is None:
+            raise HTTPException(503, "Desktop shutdown unavailable")
+        background_tasks.add_task(app.state.shutdown_callback)
+        return {"stopping": True}
+
     @app.post("/auth/logout")
     def auth_logout(request: Request, response: Response, _: None = Depends(require_owner_write)):
         token = request.cookies.get("awb_session", "")
@@ -179,6 +239,15 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     @app.get("/auth/me")
     def auth_me(csrf: str = Depends(require_owner)):
         return {"authenticated": True, "csrf": csrf}
+
+    @app.post("/v1/local/shutdown")
+    def local_shutdown(request: Request, background_tasks: BackgroundTasks,
+                       _: None = Depends(require_owner_write)):
+        require_local_desktop(request)
+        if app.state.shutdown_callback is None:
+            raise HTTPException(503, "Desktop shutdown unavailable")
+        background_tasks.add_task(app.state.shutdown_callback)
+        return {"stopping": True}
 
     @app.post("/v1/pairing-codes")
     def pairing_code(_: None = Depends(require_owner_write)):

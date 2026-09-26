@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 — Windows first-run usability
+
+- Start-menu and portable launch now run in the background and open the browser without a terminal window.
+- First-use owner password setup moves into the web page, with automatic sign-in after creation.
+- Add an authenticated “关闭工作台” action to stop the local server and collector.
+- Keep a separate console CLI for backup and advanced operations; existing data and passwords remain valid.
+- Add a windowless password-reset launcher that preserves devices, sessions and statistics.
+
 ## 0.2.0 — Windows single-machine release
 
 - Added a per-user Windows installer and portable ZIP. App data lives outside the installed program directory.
