@@ -37,10 +37,13 @@ def calculate(db: Database, day: str, tz: str, device_ids: list[str] | None = No
         source_rows = conn.execute("SELECT id,device_id,agent,last_scan,last_event,last_error FROM sources").fetchall()
     eligible = []
     intervals = []
+    settled_duration_ms = 0
     complete_durations = []
     finished_count = 0
     mixed = []
     for r in rows:
+        if r["parent_run_ref"]:
+            continue
         if devices and r["device_id"] not in devices:
             continue
         if agents_set and r["agent"] not in agents_set:
@@ -53,8 +56,12 @@ def calculate(db: Database, day: str, tz: str, device_ids: list[str] | None = No
         if a is None or a >= end or (b is not None and b <= start):
             continue
         eligible.append(r)
-        if b is not None and b > a and r["status"] == "completed":
-            intervals.append((max(a, start), min(b, end)))
+        if (b is not None and b >= a and r["status"] in {"completed", "failed", "cancelled"}
+                and r["duration_basis"] in {"source", "start_end"}):
+            clipped = (max(a, start), min(b, end))
+            if clipped[1] > clipped[0]:
+                intervals.append(clipped)
+                settled_duration_ms += clipped[1] - clipped[0]
         if start <= a < end and r["status"] == "completed":
             finished_count += 1
             if b is not None and b >= a and r["duration_ms"] is not None and r["duration_basis"] in {"source", "start_end"}:
@@ -110,6 +117,7 @@ def calculate(db: Database, day: str, tz: str, device_ids: list[str] | None = No
     med = statistics.median(durations_sorted) if durations_sorted else None
     metrics = [
         _metric("active_wall_ms", union_ms(intervals), "ms", len(intervals), len(eligible)-len(intervals), "并行轮次区间取并集"),
+        _metric("settled_duration_ms", settled_duration_ms, "ms", len(intervals), len(eligible)-len(intervals), "已结算顶层轮次累计时间；并行时间分别计入"),
         _metric("run_count", len([r for r in eligible if start <= (_ms(r["start_at"]) or -1) < end]), "runs", len(eligible), 0),
         _metric("completed_count", finished_count, "runs", finished_count, 0),
         _metric("duration_mean_ms", round(statistics.mean(durations_sorted)) if durations_sorted else None, "ms", len(durations_sorted), finished_count-len(durations_sorted)),

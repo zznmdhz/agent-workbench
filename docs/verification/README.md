@@ -13,4 +13,8 @@
 
 2026-09-23 本机验证：Windows Codex 15,761 条与 Hermes 22,042 条 stats_only 事件写入本地 outbox，合计 37,803 条，全部通过 Pydantic wire contract 验证；未传输到中心或 GitHub。`uv run pytest -q` 通过 5 个自动测试；`uv run ruff check src tests`、`cd web && pnpm build` 通过。GitHub CI 在 Windows/macOS/Linux 上通过代码测试；这不等于对应机器已运行真实 Agent 来源。此结果证明当前 Windows 安装的数据可读取和标准化，不证明所有版本/入口、统计完整性或跨机部署。当前机器没有 Docker，也没有可访问的 Mac/NAS 验收环境。
 
-Windows 便携包验证：PyInstaller 目录构建成功，ZIP 完整性检查通过；从包内 `AgentWorkbench.exe` 启动后，`/health/ready`、网页首页、JS 资源和单 owner 登录均通过本机 smoke test。测试没有执行真实系统安装或 Windows 登录后自启动；包未签名。
+2026-09-26 Windows v0.2.0 验证：`uv run pytest -q` 通过 8 项测试，`uv run ruff check src tests` 与 `pnpm --dir web build` 通过。Inno Setup 安装程序构建成功，在本机静默安装到测试目录后，安装版 EXE 的 `/health/ready`、网页首页和单 owner 登录通过。用虚构 Codex JSONL 测试自动发现、上传、会话与消息投影，待传归零。
+
+本机真实来源仅以 `stats_only` 策略导入测试数据库：38,537 条事件、314 条会话、30,015 条消息、608 条轮次和 7,023 条用量观察完成投影；待传 0、隔离 0。统计接口在 2026-09-23 香港时区返回 HTTP 200，并给出独立的并行时间并集与累计执行时间。运行中的数据库成功生成一致性备份；停止写入后再次备份并恢复，`events/sessions/messages/runs/usage_observations/devices/sources` 七张表的记录数量与源库一致。私有测试库、outbox、备份和日志均保存在 `.local/`，不发布。
+
+Windows 安装版未测试系统登录后自启动、自动更新或代码签名，也没有目标 Mac/NAS 环境。v0.2.0 的通过结论仅覆盖当前 Windows 单机发行范围，不等于原 PRD 的跨机完整验收。

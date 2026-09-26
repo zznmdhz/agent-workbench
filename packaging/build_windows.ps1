@@ -21,11 +21,17 @@ uv run --frozen --group build pyinstaller --noconfirm --onedir --contents-direct
     --workpath $work --specpath $spec packaging/entrypoint.py
 if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed' }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Start-AgentWorkbench.cmd') -Destination $portable
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Pair-This-PC.cmd') -Destination $portable
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Collect-This-PC.cmd') -Destination $portable
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README-PORTABLE.md') -Destination $portable
 Copy-Item -LiteralPath (Join-Path $workspace 'LICENSE') -Destination $portable
-$archive = Join-Path $workspace 'dist\AgentWorkbench-Windows-preview.zip'
+$archive = Join-Path $workspace 'dist\AgentWorkbench-Windows-portable-0.2.0.zip'
 New-Item -ItemType Directory -Force -Path (Split-Path $archive) | Out-Null
 Compress-Archive -LiteralPath $portable -DestinationPath $archive -CompressionLevel Optimal -Force
 Get-FileHash -Algorithm SHA256 -LiteralPath $archive | Select-Object Path, Hash
+$compiler = Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'
+if (-not (Test-Path -LiteralPath $compiler)) {
+    $compiler = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+}
+if (-not (Test-Path -LiteralPath $compiler)) { throw 'Inno Setup 6 compiler not found' }
+& $compiler (Join-Path $PSScriptRoot 'AgentWorkbench.iss')
+if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
+Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $workspace 'dist\AgentWorkbench-Setup-0.2.0-Windows-x64.exe') | Select-Object Path, Hash

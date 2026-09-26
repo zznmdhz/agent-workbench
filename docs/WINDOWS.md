@@ -1,0 +1,27 @@
+# Windows 安装与使用
+
+## 安装
+
+从 [GitHub Releases](https://github.com/zznmdhz/agent-workbench/releases) 下载 `AgentWorkbench-Setup-0.2.0-Windows-x64.exe`。安装程序使用当前用户权限，不需要管理员权限。安装后从开始菜单打开 **Agent Workbench**。首次启动会在窗口中要求设置至少 12 位管理员密码，然后打开 `http://127.0.0.1:8765/`。运行期间保持启动窗口开启；再次点击快捷方式会打开已有工作台。
+
+首次启动自动检测本机的 Codex 会话目录和 Hermes 数据库，并以**仅统计**策略只读采集。历史数据较多时，首次导入需要几分钟；“设备与设置”显示来源、最近扫描和待传队列。总览默认查看香港时区的当天，若只有历史记录，页面会提供最近有记录日期的入口。
+
+如希望查看今后的对话正文，在“设备与设置”将本机来源切换为“保存脱敏后的正文”。此设置只影响**切换后产生的新记录**，不会回填以前按仅统计策略采集的正文。脱敏规则无法保证去掉所有隐私内容，开启前请自行判断。默认保持仅统计。
+
+## 数据、备份和升级
+
+安装文件默认位于 `%LOCALAPPDATA%\Programs\AgentWorkbench`；本机数据库、采集队列和设备凭据位于 `%LOCALAPPDATA%\AgentWorkbench\data`。卸载程序不会删除这些私人数据；重装同一版本或升级会继续使用原数据。请勿分享或上传 `data` 文件夹。
+
+在 PowerShell 中运行以下命令生成一致性备份；可以在工作台运行时执行：
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\AgentWorkbench\AgentWorkbench.exe" backup --db "$env:LOCALAPPDATA\AgentWorkbench\data\agent-workbench.db" --output "$env:USERPROFILE\Documents\agent-workbench-backup.zip"
+```
+
+恢复时先关闭工作台，使用 `restore-to <备份 ZIP> <空目录>` 校验并解包，再根据[运行手册](RUNBOOK.md)核对恢复代际、设备队列与备份后的数据缺口。恢复备份不代表自动补回已经从原始来源和 outbox 中删除的事件。
+
+从旧便携预览版迁移：先关闭旧版和新版的所有窗口；将旧版解压目录的 `data` 文件夹完整复制到 `%LOCALAPPDATA%\AgentWorkbench\data`，覆盖前先备份已有的新版本数据。数据库、`collector.json` 和 `outbox.db` 必须一起迁移。启动新版后核对设备、来源和待传状态，再删除旧版目录。不要让两套程序同时使用同一份数据。
+
+## 当前范围
+
+本安装程序为 Windows 单机版。它支持本机 Codex/Hermes 只读采集、网页查看、搜索、来源策略、交接包和手工备份。Mac/NAS 实机接入、真正的双机交接、系统服务/登录自启动、自动更新和代码签名不包含在本次 Windows 验收内。跨机部署请先看[公开路线图](project/ROADMAP.md)，不要把本机通过视为跨机功能已验收。

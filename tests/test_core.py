@@ -79,6 +79,7 @@ def test_outbox_repeated_scan_has_no_sequence_holes(tmp_path: Path):
         f.write(json.dumps({"type": "response_item", "timestamp": "2026-09-23T01:00:01Z",
                             "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}}) + "\n")
     queue = Outbox(tmp_path / "outbox.db")
+    assert Outbox(tmp_path / "outbox.db").epoch() == queue.epoch()
     source = {"id": str(uuid4()), "agent": "codex", "root": str(sessions), "content_policy": "stats_only"}
     device = str(uuid4())
     assert scan_codex(source, queue, device) == 2

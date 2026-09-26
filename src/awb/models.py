@@ -115,7 +115,7 @@ class Batch(BaseModel):
     batch_id: UUID
     collector_id: UUID
     outbox_epoch: UUID
-    entries: list[BatchEntry] = Field(min_length=1, max_length=200)
+    entries: list[BatchEntry] = Field(min_length=1, max_length=500)
 
     @model_validator(mode="after")
     def unique_seq(self) -> "Batch":

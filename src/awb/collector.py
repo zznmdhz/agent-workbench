@@ -78,6 +78,7 @@ class Outbox:
             db.executescript(OUTBOX_SCHEMA)
             if not db.execute("SELECT 1 FROM meta WHERE key='epoch'").fetchone():
                 db.execute("INSERT INTO meta VALUES('epoch',?)", (str(uuid4()),))
+            db.commit()
 
     def connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path, timeout=5)
@@ -218,7 +219,7 @@ def scan_codex(source: dict, outbox: Outbox, device_id: str) -> int:
                         facts.append(make_event(sid, session_id, "run.observed", turn_id, status, before, at,
                                                 {"native_turn_id": turn_id, "status": status,
                                                  "start_at": iso_utc(payload.get("started_at")) or (at if status == "running" else None),
-                                                 "end_at": iso_utc(payload.get("completed_at")) if status == "completed" else None,
+                                                 "end_at": (iso_utc(payload.get("completed_at")) or at) if status == "completed" else None,
                                                  "duration_ms": payload.get("duration_ms"),
                                                  "duration_basis": "source" if payload.get("duration_ms") is not None else None,
                                                  "model_attribution": {"kind": "unknown"}},
@@ -304,7 +305,16 @@ def scan_hermes(source: dict, outbox: Outbox, device_id: str) -> int:
 
 
 def send_pending(config: dict, outbox: Outbox) -> dict:
-    pending = outbox.pending(100)
+    candidates = outbox.pending(500)
+    pending = []
+    byte_budget = 3 * 1024 * 1024
+    used_bytes = 0
+    for row in candidates:
+        row_bytes = len(row["event_json"].encode("utf-8")) + len(row["observation_json"].encode("utf-8")) + 256
+        if pending and used_bytes + row_bytes > byte_budget:
+            break
+        pending.append(row)
+        used_bytes += row_bytes
     if not pending:
         return {"sent": 0, "pending": 0}
     body = {"batch_id": str(uuid4()), "collector_id": config["collector_id"],
@@ -312,7 +322,7 @@ def send_pending(config: dict, outbox: Outbox) -> dict:
     for row in pending:
         body["entries"].append({"seq": row["seq"], "observation": json.loads(row["observation_json"]),
                                 "event": json.loads(row["event_json"])})
-    with httpx.Client(base_url=config["server"], timeout=30, verify=config.get("verify_tls", True)) as client:
+    with httpx.Client(base_url=config["server"], timeout=120, verify=config.get("verify_tls", True)) as client:
         response = client.post("/v1/ingest/batches", headers={"Authorization": "Bearer " + config["token"]}, json=body)
         response.raise_for_status()
         result = response.json()
@@ -338,7 +348,16 @@ def run_cycle(config: dict, outbox: Outbox) -> dict:
             added += (scan_codex if source["agent"] == "codex" else scan_hermes)(source, outbox, config["collector_id"])
         except (OSError, sqlite3.DatabaseError, ValueError) as exc:
             errors[source["id"]] = type(exc).__name__
-    sent = send_pending(config, outbox)
+    sent = {"sent": 0, "pending": outbox.count_pending()}
+    deadline = time.monotonic() + 25
+    while sent["pending"] and time.monotonic() < deadline:
+        batch = send_pending(config, outbox)
+        sent["sent"] += batch["sent"]
+        sent["pending"] = batch["pending"]
+        if "server_epoch" in batch:
+            sent["server_epoch"] = batch["server_epoch"]
+        if batch["sent"] == 0:
+            break
     with httpx.Client(base_url=config["server"], timeout=15, verify=config.get("verify_tls", True)) as client:
         headers = {"Authorization": "Bearer " + config["token"]}
         heartbeat = client.post("/v1/collectors/heartbeat", headers=headers,

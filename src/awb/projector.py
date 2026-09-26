@@ -79,6 +79,16 @@ def project(db: sqlite3.Connection, event: dict[str, Any]) -> None:
         old = db.execute("SELECT * FROM runs WHERE id=?", (rid,)).fetchone()
         incoming = c.get("source_order")
         if old and incoming is not None and old["source_order"] is not None and incoming < old["source_order"]:
+            # A terminal record can arrive before its earlier start record.
+            earlier_start = iso_utc(p.get("start_at"))
+            if old["start_at"] is None and earlier_start is not None:
+                duration = None
+                if old["end_at"] is not None:
+                    duration = utc_ms(old["end_at"]) - utc_ms(earlier_start)
+                db.execute("""UPDATE runs SET start_at=?,duration_ms=COALESCE(duration_ms,?),
+                    duration_basis=COALESCE(duration_basis,?) WHERE id=?""",
+                           (earlier_start, duration if duration is not None and duration >= 0 else None,
+                            "start_end" if duration is not None and duration >= 0 else None, rid))
             return
         old_status = old["status"] if old else "unknown"
         terminal = {"completed", "failed", "cancelled"}
@@ -93,6 +103,11 @@ def project(db: sqlite3.Connection, event: dict[str, Any]) -> None:
         duration = p.get("duration_ms")
         if duration is None and old:
             duration = old["duration_ms"]
+        basis = p.get("duration_basis") or (old["duration_basis"] if old else None)
+        if duration is None and start is not None and end is not None:
+            inferred = utc_ms(end) - utc_ms(start)
+            if inferred >= 0:
+                duration, basis = inferred, "start_end"
         db.execute(
             """INSERT INTO runs(id,session_id,native_id,device_id,model,model_attribution,status,
                 start_at,end_at,duration_ms,duration_basis,parent_run_ref,event_id,source_order)
@@ -104,7 +119,7 @@ def project(db: sqlite3.Connection, event: dict[str, Any]) -> None:
                 source_order=excluded.source_order""",
             (rid, session_id, p["native_turn_id"], c["execution"]["physical_device_id"] or (old["device_id"] if old else None),
              model or (old["model"] if old else None), model_kind if model else (old["model_attribution"] if old else "unknown"),
-             status, start, end, duration, p.get("duration_basis") or (old["duration_basis"] if old else None),
+             status, start, end, duration, basis,
              p.get("parent_run_ref") or (old["parent_run_ref"] if old else None), event["event_id"], incoming),
         )
     elif c["fact_kind"] == "usage.observed":

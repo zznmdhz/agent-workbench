@@ -6,13 +6,13 @@
 
 ## 状态
 
-这是公开的开发仓库，尚未发布稳定版。已实现单用户登录、设备配对与来源授权、只读 Codex/Hermes 采集、持久化 outbox、断线重传、会话/搜索/基础统计网页，以及交接包、限定根目录文件核验和可选进程采样的初版接口。Windows 本机来源读取和自动测试已验证；Mac 采集、NAS 容器、真实双机接续、安全与性能验收仍需目标环境。详见[验证记录](docs/verification/README.md)和[剩余工作](docs/project/ROADMAP.md)。
+**v0.2.0 是 Windows 单机安装版。** 启动后自动登记本机 Codex/Hermes 来源并以仅统计策略采集；会话、搜索、统计、来源状态和交接包可在网页使用。Windows 安装、登录与本机采集已测试。Mac 采集、NAS 容器和真实双机接续仍需目标环境，因此整个跨机 PRD 尚未验收。详见[Windows 使用说明](docs/WINDOWS.md)、[验证记录](docs/verification/README.md)和[剩余工作](docs/project/ROADMAP.md)。
 
 ## 本地开发
 
-### Windows 便携预览包
+### Windows 安装版
 
-[下载 Windows 便携预览 ZIP](https://github.com/zznmdhz/agent-workbench/releases/tag/v0.1.0-preview.1)。解压后双击 `Start-AgentWorkbench.cmd`，首次启动在窗口中设置管理员密码；浏览器随后打开 `http://127.0.0.1:8765/`。如需采集这台电脑的活动，再按包内 `README-PORTABLE.md` 依次运行配对与采集脚本。这个包没有系统安装程序、自启动或自动更新，也尚未完成 Mac/NAS 实机验收。
+[下载 Windows v0.2.0 安装程序](https://github.com/zznmdhz/agent-workbench/releases/tag/v0.2.0)。从开始菜单打开，首次在启动窗口设置管理员密码；工作台会自动打开浏览器、发现本机来源并开始仅统计采集。无需手动配对或复制来源 ID。另提供无需安装的便携 ZIP。数据与升级说明见 [Windows 使用说明](docs/WINDOWS.md)。
 
 ### 从源码运行
 

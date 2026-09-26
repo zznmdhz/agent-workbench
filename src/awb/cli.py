@@ -8,7 +8,7 @@ import platform
 import time
 import webbrowser
 from pathlib import Path
-from threading import Timer
+from threading import Event, Thread, Timer
 from uuid import uuid4
 
 import httpx
@@ -19,6 +19,7 @@ from .auth import initialize_owner
 from .backup import create_backup, restore_backup
 from .collector import Outbox, run_cycle
 from .db import Database
+from .local import prepare_local_collector
 
 app = typer.Typer(help="Agent Workbench service and read-only collectors")
 
@@ -57,7 +58,19 @@ def serve(host: str = "127.0.0.1", port: int = 8765,
 @app.command("open")
 def open_workbench(db: Path = typer.Option(Path("data/agent-workbench.db")),
                    port: int = typer.Option(8765, min=1, max=65535),
-                   browser: bool = typer.Option(True, "--browser/--no-browser")):
+                   browser: bool = typer.Option(True, "--browser/--no-browser"),
+                   auto_collect: bool = typer.Option(True, "--auto-collect/--no-auto-collect")):
+    local_url = f"http://127.0.0.1:{port}"
+    try:
+        with httpx.Client(timeout=2) as client:
+            existing = client.get(local_url + "/health/ready")
+        if existing.status_code == 200 and existing.json().get("status") == "ready":
+            if browser:
+                webbrowser.open(local_url + "/")
+            typer.echo(f"Agent Workbench is already running at {local_url}/")
+            return
+    except (httpx.HTTPError, ValueError):
+        pass
     store = Database(db)
     store.initialize()
     with store.read() as conn:
@@ -65,6 +78,36 @@ def open_workbench(db: Path = typer.Option(Path("data/agent-workbench.db")),
     if not initialized:
         password = typer.prompt("Create owner password (12+ characters)", hide_input=True, confirmation_prompt=True)
         initialize_owner(store, password)
+    if auto_collect:
+        config_path = db.parent / "collector.json"
+        try:
+            prepare_local_collector(store, config_path, port)
+        except ValueError as exc:
+            typer.echo(f"Automatic local collector unavailable: {exc}", err=True)
+        else:
+            def collect_local() -> None:
+                queue = Outbox(db.parent / "outbox.db")
+                # Uvicorn may need a moment to bind its listening socket.
+                while True:
+                    try:
+                        with httpx.Client(timeout=2) as client:
+                            if client.get(f"http://127.0.0.1:{port}/health/ready").status_code == 200:
+                                break
+                    except httpx.HTTPError:
+                        pass
+                    Event().wait(1)
+                while True:
+                    delay = 15
+                    try:
+                        result = run_cycle(_config(config_path), queue)
+                        typer.echo(f"Local collector: {json.dumps(result, ensure_ascii=False)}")
+                        if result.get("pending"):
+                            delay = 1
+                    except Exception as exc:
+                        typer.echo(f"Local collector error: {type(exc).__name__}: {exc}", err=True)
+                    Event().wait(delay)
+
+            Thread(target=collect_local, name="awb-local-collector", daemon=True).start()
     if browser:
         Timer(2.0, lambda: webbrowser.open(f"http://127.0.0.1:{port}/")).start()
     serve(host="127.0.0.1", port=port, db=db)
@@ -128,12 +171,15 @@ def collect(interval: int = typer.Option(15, min=5), config: Path = Path(".local
             outbox: Path = Path(".local/outbox.db")):
     queue = Outbox(outbox)
     while True:
+        delay = interval
         try:
             result = run_cycle(_config(config), queue)
             typer.echo(json.dumps(result, ensure_ascii=False))
+            if result.get("pending"):
+                delay = 1
         except (httpx.HTTPError, OSError, ValueError) as exc:
             typer.echo(f"Collector cycle failed: {type(exc).__name__}", err=True)
-        time.sleep(interval)
+        time.sleep(delay)
 
 
 @app.command("backup")

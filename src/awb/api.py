@@ -34,6 +34,7 @@ from .db import Database
 from .filecheck import create_job, jobs_for_collector, record_result
 from .handoff import create_handoff, get_handoff, link_continuation
 from .ingest import receive_batch, resolve_quarantine, server_epoch
+from .local import set_local_source_policy
 from .models import Batch
 from .resources import record_samples
 from .stats import calculate, timeline
@@ -57,6 +58,10 @@ class SourceRequest(BaseModel):
     profile: str
     execution_surface: str = "unknown"
     content_policy: str = "full_content"
+
+
+class LocalPolicyRequest(BaseModel):
+    content_policy: str
 
 
 class ResolveRequest(BaseModel):
@@ -125,7 +130,7 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
     path = Path(db_path or os.environ.get("AWB_DB_PATH", "./data/agent-workbench.db"))
     db = Database(path)
     db.initialize()
-    app = FastAPI(title="Agent Workbench", version="0.1.0")
+    app = FastAPI(title="Agent Workbench", version="0.2.0")
     app.state.db = db
 
     @app.middleware("http")
@@ -218,6 +223,16 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
         with db.read() as conn:
             rows = conn.execute("SELECT * FROM sources ORDER BY created_at,id").fetchall()
         return {"items": [dict(r) for r in rows]}
+
+    @app.post("/v1/local/sources/{source_id}/policy")
+    def local_source_policy(source_id: UUID, body: LocalPolicyRequest,
+                            _: None = Depends(require_owner_write)):
+        try:
+            set_local_source_policy(db, str(source_id), body.content_policy)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        return {"source_id": str(source_id), "content_policy": body.content_policy,
+                "notice": "Policy changes apply to future source records only."}
 
     @app.post("/v1/ingest/batches")
     def ingest(body: Batch, collector: str = Depends(require_collector)):
@@ -334,19 +349,23 @@ def create_app(db_path: str | Path | None = None) -> FastAPI:
                limit: int = Query(50, ge=1, le=200), _: str = Depends(require_owner)):
         filters = {"q": q}
         sort, anchor = _page_cursor(cursor, filters)
+        search_sort, search_anchor = (sort, anchor) if cursor else ("~", "~")
+        pattern = "%" + q.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%"
         with db.read() as conn:
-            fts = conn.execute("SELECT 1 FROM sqlite_master WHERE name='messages_fts'").fetchone()
-            predicate = ("m.id IN (SELECT message_id FROM messages_fts WHERE body LIKE ? ESCAPE '!')"
-                         if fts and len(q) >= 3 else "m.body LIKE ? ESCAPE '!'")
-            rows = conn.execute(f"""SELECT m.id,m.session_id,m.role,m.occurred_at,
-                substr(m.body,1,320) AS excerpt,s.title,s.agent FROM messages m
-                JOIN sessions s ON s.id=m.session_id WHERE s.archived=0 AND {predicate}
-                AND (COALESCE(m.occurred_at,'')>? OR (COALESCE(m.occurred_at,'')=? AND m.id>?))
-                ORDER BY COALESCE(m.occurred_at,''),m.id LIMIT ?""",
-                ("%" + q.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%", sort, sort, anchor, limit+1)).fetchall()
+            rows = conn.execute("""SELECT s.id,s.id AS session_id,s.title,s.agent,s.last_activity,
+                COALESCE((SELECT substr(m.body,1,320) FROM messages m WHERE m.session_id=s.id
+                    AND m.body LIKE ? ESCAPE '!' ORDER BY m.occurred_at DESC LIMIT 1),
+                    s.cwd,s.title,'') AS excerpt
+                FROM sessions s WHERE s.archived=0 AND (s.title LIKE ? ESCAPE '!'
+                    OR s.cwd LIKE ? ESCAPE '!' OR EXISTS (SELECT 1 FROM messages m
+                    WHERE m.session_id=s.id AND m.body LIKE ? ESCAPE '!'))
+                AND (COALESCE(s.last_activity,'')<? OR (COALESCE(s.last_activity,'')=? AND s.id<?))
+                ORDER BY COALESCE(s.last_activity,'') DESC,s.id DESC LIMIT ?""",
+                (pattern, pattern, pattern, pattern, search_sort, search_sort, search_anchor, limit+1)).fetchall()
         items = [dict(r) for r in rows[:limit]]
-        next_cursor = _cursor(items[-1]["occurred_at"] or "", items[-1]["id"], filters) if len(rows) > limit else None
-        return {"items": items, "next_cursor": next_cursor, "search_scope": "stored message bodies; first 320 characters shown"}
+        next_cursor = _cursor(items[-1]["last_activity"] or "", items[-1]["id"], filters) if len(rows) > limit else None
+        return {"items": items, "next_cursor": next_cursor,
+                "search_scope": "session titles, working directories and stored message bodies"}
 
     @app.get("/v1/files/{file_id}")
     def file_detail(file_id: str, _: str = Depends(require_owner)):
