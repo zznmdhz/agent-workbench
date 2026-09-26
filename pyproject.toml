@@ -1,6 +1,6 @@
 [project]
 name = "agent-workbench"
-version = "0.3.0"
+version = "0.4.0"
 description = "Personal, self-hosted Codex and Hermes activity workbench"
 readme = "README.md"
 requires-python = ">=3.12"

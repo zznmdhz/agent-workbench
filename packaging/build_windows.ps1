@@ -45,7 +45,7 @@ New-Item -ItemType File -Path (Join-Path $portableStage 'portable.flag') -Force 
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README-PORTABLE.md') -Destination $portableStage
 Copy-Item -LiteralPath (Join-Path $workspace 'LICENSE') -Destination $portableStage
 Copy-Item -LiteralPath (Join-Path $workspace 'docs\third_party\CC_SWITCH_LICENSE.txt') -Destination (Join-Path $portableStage 'THIRD-PARTY-CC-SWITCH-LICENSE.txt')
-$archive = Join-Path $workspace 'dist\AgentWorkbench-Windows-portable-0.3.0.zip'
+$archive = Join-Path $workspace 'dist\AgentWorkbench-Windows-portable-0.4.0.zip'
 New-Item -ItemType Directory -Force -Path (Split-Path $archive) | Out-Null
 Compress-Archive -LiteralPath $portableStage -DestinationPath $archive -CompressionLevel Optimal -Force
 Get-FileHash -Algorithm SHA256 -LiteralPath $archive | Select-Object Path, Hash
@@ -56,4 +56,4 @@ if (-not (Test-Path -LiteralPath $compiler)) {
 if (-not (Test-Path -LiteralPath $compiler)) { throw 'Inno Setup 6 compiler not found' }
 & $compiler (Join-Path $PSScriptRoot 'AgentWorkbench.iss')
 if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
-Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $workspace 'dist\AgentWorkbench-Setup-0.3.0-Windows-x64.exe') | Select-Object Path, Hash
+Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $workspace 'dist\AgentWorkbench-Setup-0.4.0-Windows-x64.exe') | Select-Object Path, Hash
