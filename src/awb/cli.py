@@ -19,6 +19,7 @@ from .auth import initialize_owner
 from .backup import create_backup, restore_backup
 from .collector import Outbox, run_cycle
 from .db import Database
+from .identity_repair import apply_staged_codex_identity_repair, stage_codex_identity_repair
 from .local import prepare_local_collector
 
 app = typer.Typer(help="Agent Workbench service and read-only collectors")
@@ -192,6 +193,26 @@ def backup(db: Path = Path("data/agent-workbench.db"), output: Path = Path("back
 def restore_to(archive: Path, target_dir: Path):
     path = restore_backup(archive, target_dir)
     typer.echo(f"Verified restore at {path}; use this directory only after checking security changes since backup.")
+
+
+@app.command("repair-codex-identity")
+def repair_codex_identity(
+    db: Path = typer.Option(..., help="Server database path"),
+    outbox: Path = typer.Option(..., help="Local collector outbox path"),
+    config: Path = typer.Option(..., help="Local collector config path"),
+    stage_dir: Path = typer.Option(..., help="New, empty stage directory"),
+    backup_dir: Path = typer.Option(..., help="New, empty backup directory"),
+    apply: bool = typer.Option(False, "--apply", help="Apply a previously reviewed stage"),
+    offline_confirmed: bool = typer.Option(False, "--offline-confirmed",
+                                           help="Confirm desktop service and collector are stopped"),
+):
+    if not offline_confirmed:
+        raise typer.BadParameter("Stop the desktop service and collector, then pass --offline-confirmed")
+    if apply:
+        result = apply_staged_codex_identity_repair(db, outbox, config, stage_dir, backup_dir)
+    else:
+        result = stage_codex_identity_repair(db, outbox, config, stage_dir, backup_dir)
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

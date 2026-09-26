@@ -11,7 +11,7 @@
 .deviceButton>span:nth-child(2){min-width:0;flex:1}
 .trendPanel,.comparePanel{margin-top:18px}
 .trendRows{display:grid;gap:6px}
-.trendRow{display:grid;grid-template-columns:64px minmax(100px,1fr) 62px 140px;gap:12px;align-items:center;width:100%;padding:8px;border:0;border-radius:6px;background:transparent;text-align:left;color:#516278;font-size:12px}
+.trendRow{display:grid;grid-template-columns:64px minmax(100px,1fr) 110px 160px;gap:12px;align-items:center;width:100%;padding:8px;border:0;border-radius:6px;background:transparent;text-align:left;color:#516278;font-size:12px}
 .trendRow:hover,.compareRow:not(.head):hover{background:#f4f8ff}
 .trendTrack{height:11px;background:#edf2f9;border-radius:8px;overflow:hidden}
 .trendTrack span{display:block;height:100%;background:#5387e8;border-radius:8px}
@@ -25,3 +25,6 @@
 .dialogClose{position:absolute;right:18px;top:14px;background:transparent;border:0;color:#778599;font-size:24px}
 .metricDialog{max-height:min(88vh,850px);overflow:auto}.metricDialog h3{font-size:14px;margin:20px 0 8px}.contributorList{max-height:280px;overflow:auto;border-top:1px solid #e9edf3}.contributorList button{display:flex;justify-content:space-between;gap:12px;align-items:center;width:100%;text-align:left;background:transparent;border:0;border-bottom:1px solid #edf0f4;padding:11px 2px;color:#324155}.contributorList button:hover{background:#f4f8ff}.contributorList b,.contributorList small{display:block}.contributorList small{font-size:11px;color:#8998aa;margin-top:4px}.contributorList strong{white-space:nowrap;font-size:13px;color:#386ce3}
 @media(max-width:800px){.trendRow{grid-template-columns:55px 1fr 55px}.trendRow small{display:none}.dashboardFilters{align-items:flex-start}}
+.dataAsOf{margin:0 0 8px;color:#66788d;font-size:12px}
+.usageContext{margin:0 0 17px;padding:11px 13px;border:1px solid #e4ebf5;border-radius:8px;color:#536a84;background:#fafcff;font-size:12px;line-height:1.6}
+.verificationNote{padding:9px 11px;background:#fff6e6;border-radius:6px;color:#765725!important}

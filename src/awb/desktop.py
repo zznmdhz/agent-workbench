@@ -57,7 +57,7 @@ def _is_workbench(url: str) -> bool:
         with httpx.Client(timeout=1) as client:
             result = client.get(url + "/health/ready")
         body = result.json()
-        return result.status_code == 200 and body.get("status") == "ready" and body.get("app_version") == "0.2.3"
+        return result.status_code == 200 and body.get("status") == "ready" and body.get("app_version") == "0.2.4"
     except (httpx.HTTPError, ValueError):
         return False
 
@@ -75,7 +75,8 @@ def _collect(db_path: Path, port: int, stop: Event) -> None:
                 continue
             prepare_local_collector(store, config_path, port)
             result = run_cycle(json.loads(config_path.read_text(encoding="utf-8")), outbox)
-            stop.wait(1 if result.get("pending") else 15)
+            recovering_history = result.get("backfill", {}).get("units_processed", 0) > 0
+            stop.wait(1 if result.get("pending") or recovering_history else 15)
         except Exception as exc:
             print(f"Local collector: {type(exc).__name__}: {exc}", file=sys.stderr)
             stop.wait(15)

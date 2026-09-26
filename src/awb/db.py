@@ -72,6 +72,10 @@ CREATE TABLE IF NOT EXISTS sessions(
   UNIQUE(source_id,native_id)
 );
 CREATE INDEX IF NOT EXISTS ix_sessions_activity ON sessions(last_activity);
+CREATE TABLE IF NOT EXISTS session_titles(
+  session_id TEXT PRIMARY KEY REFERENCES sessions(id),
+  user_title TEXT NOT NULL, updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS messages(
   id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id),
   native_id TEXT NOT NULL, role TEXT NOT NULL, input_origin TEXT NOT NULL,
@@ -81,6 +85,7 @@ CREATE TABLE IF NOT EXISTS messages(
   UNIQUE(session_id,native_id)
 );
 CREATE INDEX IF NOT EXISTS ix_messages_session_time ON messages(session_id,occurred_at,id);
+CREATE INDEX IF NOT EXISTS ix_messages_session_turn ON messages(session_id,turn_id,occurred_at,id);
 CREATE TABLE IF NOT EXISTS runs(
   id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id),
   native_id TEXT NOT NULL, device_id TEXT, model TEXT,
@@ -90,6 +95,7 @@ CREATE TABLE IF NOT EXISTS runs(
   UNIQUE(session_id,native_id)
 );
 CREATE INDEX IF NOT EXISTS ix_runs_time ON runs(start_at,end_at);
+CREATE INDEX IF NOT EXISTS ix_runs_session_native ON runs(session_id,native_id);
 CREATE INDEX IF NOT EXISTS ix_runs_device ON runs(device_id);
 CREATE TABLE IF NOT EXISTS usage_observations(
   event_id TEXT PRIMARY KEY REFERENCES events(event_id), session_id TEXT NOT NULL,

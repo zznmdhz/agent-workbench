@@ -50,11 +50,19 @@ def project(db: sqlite3.Connection, event: dict[str, Any]) -> None:
         )
     elif c["fact_kind"] == "message.observed":
         msg_id = sha256([session_id, p["native_message_id"]])
-        old = db.execute("SELECT source_order FROM messages WHERE id=?", (msg_id,)).fetchone()
+        old = db.execute("SELECT source_order,event_id,body,content_state,turn_id FROM messages WHERE id=?", (msg_id,)).fetchone()
         incoming = c.get("source_order")
-        if old and incoming is not None and old[0] is not None and incoming < old[0]:
+        revision = bool(old and c.get("supersedes_event_id") == old["event_id"])
+        if old and not revision and incoming is not None and old["source_order"] is not None and incoming < old["source_order"]:
             return
         body = p.get("body") if p["content_state"] in {"full", "redacted"} else None
+        # A later metadata-only rescan must not erase an already authorized body.
+        # Explicit content revisions may change a stored body at the same source offset.
+        if old and old["body"] is not None and body is None and not revision:
+            body = old["body"]
+            content_state = old["content_state"]
+        else:
+            content_state = p["content_state"]
         db.execute(
             """INSERT INTO messages(id,session_id,native_id,role,input_origin,body,content_state,
                 omission_reason,source_char_count,occurred_at,turn_id,event_id,source_order,finalized)
@@ -65,8 +73,9 @@ def project(db: sqlite3.Connection, event: dict[str, Any]) -> None:
                 turn_id=excluded.turn_id,event_id=excluded.event_id,source_order=excluded.source_order,
                 finalized=excluded.finalized""",
             (msg_id, session_id, p["native_message_id"], p["role"], p["input_origin"], body,
-             p["content_state"], p.get("omission_reason"), p.get("source_text_char_count"),
-             at, p.get("native_turn_id"), event["event_id"], incoming, int(bool(p["finalized"]))),
+             content_state, None if body is not None else p.get("omission_reason"), p.get("source_text_char_count"),
+             at, p.get("native_turn_id") or (old["turn_id"] if old else None), event["event_id"],
+             incoming if incoming is not None else (old["source_order"] if old else None), int(bool(p["finalized"]))),
         )
         try:
             db.execute("DELETE FROM messages_fts WHERE message_id=?", (msg_id,))

@@ -6,13 +6,13 @@
 
 ## 状态
 
-**v0.2.3 是 Windows 单机安装版。** 启动后自动登记本机 Codex/Hermes 来源并以仅统计策略采集；会话、搜索、统计、来源状态和交接包可在网页使用。总览支持单日或近 7/10/15 天切换、设备/Agent/模型筛选、指标证据下钻、每日趋势和设备对比；Codex 输入/输出累计计数分项会在升级后自动回填。Mac 采集、NAS 容器和真实双机接续仍需目标环境，因此整个跨机 PRD 尚未验收。详见[Windows 使用说明](docs/WINDOWS.md)、[总览排查记录](docs/project/DASHBOARD_AUDIT_2026-09-26.md)、[验证记录](docs/verification/README.md)和[剩余工作](docs/project/ROADMAP.md)。
+**v0.2.4 是 Windows 单机安装版。** 网页可按日期、设备、Agent 和模型查看活动，从指标、时间线或搜索定位会话与具体轮次；会话页支持改名、逐轮分页、已采集正文、文件证据和当前文件检查。历史正文须由用户在网页选择来源和范围、预览后补采；无原始记录或未授权的内容不会被补造。Codex 子 Agent 的会话归属和累计 Token 计数已修正，并提供有备份、有预览报告的离线命令修复旧版索引；普通用户首次使用不需要命令行。Mac 采集、NAS 容器和真实双机接续仍需目标环境，因此整个跨机 PRD 尚未验收。详见[Windows 使用说明](docs/WINDOWS.md)、[产品审核与修改计划](docs/project/PRODUCT_AUDIT_AND_PLAN_2026-09-26.md)、[验证记录](docs/verification/README.md)和[剩余工作](docs/project/ROADMAP.md)。
 
 ## 本地开发
 
 ### Windows 安装版
 
-[下载 Windows v0.2.3 安装程序](https://github.com/zznmdhz/agent-workbench/releases/tag/v0.2.3)。从开始菜单打开后，浏览器会自动打开，首次在网页创建管理员密码并自动登录；工作台会发现本机来源并开始仅统计采集。无需手动配对或复制来源 ID。另提供无需安装的便携 ZIP。数据与升级说明见 [Windows 使用说明](docs/WINDOWS.md)。
+[下载 Windows v0.2.4 安装程序](https://github.com/zznmdhz/agent-workbench/releases/tag/v0.2.4)。从开始菜单打开后，浏览器会自动打开，首次在网页创建管理员密码并自动登录；工作台会发现本机来源并开始仅统计采集。无需手动配对或复制来源 ID。另提供无需安装的便携 ZIP。数据与升级说明见 [Windows 使用说明](docs/WINDOWS.md)。
 
 ### 从源码运行
 

@@ -12,7 +12,7 @@ export function HandoffPanel({sessionId,sourceDeviceId,devices,csrf}:{sessionId:
   async function create(){setError('');setResult(null)
     const response=await fetch('/v1/handoffs',{method:'POST',headers:{'Content-Type':'application/json','x-awb-csrf':csrf},
       credentials:'same-origin',body:JSON.stringify({source_session_id:sessionId,target_device_id:target})})
-    if(!response.ok){setError('无法生成交接包：请确认源会话已完整采集正文，且目标设备不同。');return}
+    if(!response.ok){setError('无法生成交接包：请确认已保存交接所需的正文，且目标设备不同。未采集的历史不能写入交接包。');return}
     setResult(await response.json())
   }
   if(!targets.length)return null

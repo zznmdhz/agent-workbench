@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .auth import issue_pair_code, now_iso, pair_device
+from .collector import Outbox
 from .db import Database
 
 
@@ -88,3 +89,82 @@ def set_local_source_policy(db: Database, source_id: str, policy: str) -> None:
     with db.tx() as conn:
         conn.execute("UPDATE sources SET capability_json=? WHERE id=? AND device_id=?",
                      (json.dumps({"content_policy": policy}), source_id, config["collector_id"]))
+
+
+def _local_backfill_sources(db: Database, source_ids: list[str]) -> list[dict]:
+    if not source_ids or len(source_ids) > 20 or len(source_ids) != len(set(source_ids)):
+        raise ValueError("Select between 1 and 20 distinct local sources")
+    config_path = db.path.parent / "collector.json"
+    if not config_path.is_file():
+        raise ValueError("Local collector is not configured")
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    configured = {source["id"]: source for source in config.get("sources", [])}
+    selected = []
+    with db.read() as conn:
+        for source_id in source_ids:
+            source = configured.get(source_id)
+            if source is None or source.get("content_policy") != "full_content":
+                raise ValueError("Historical content requires a local source with full-content policy")
+            row = conn.execute(
+                "SELECT 1 FROM sources WHERE id=? AND device_id=? AND execution_surface='local'",
+                (source_id, config["collector_id"]),
+            ).fetchone()
+            if row is None:
+                raise ValueError("Selected source is not managed by this local collector")
+            selected.append(source)
+    return selected
+
+
+def _blocked_backfill_sessions(db: Database, source_ids: list[str]) -> dict[str, list[str]]:
+    """Mirror content-deletion tombstones before text enters the local outbox."""
+    blocked: dict[str, list[str]] = {}
+    with db.read() as conn:
+        for source_id in source_ids:
+            rows = conn.execute(
+                "SELECT native_session_id FROM tombstones WHERE source_id=?",
+                (source_id,),
+            ).fetchall()
+            blocked[source_id] = [row[0] for row in rows]
+    return blocked
+
+
+def preview_content_backfill(db: Database, source_ids: list[str], *, start_at: str | None = None,
+                             end_at: str | None = None, native_session_ids: list[str] | None = None,
+                             cwd_prefix: str | None = None) -> dict:
+    """Count recoverable historical text in selected local sources without storing it."""
+    selected = _local_backfill_sources(db, source_ids)
+    return Outbox(db.path.parent / "outbox.db").preview_content_backfill(
+        selected, start_at=start_at, end_at=end_at,
+        native_session_ids=native_session_ids, cwd_prefix=cwd_prefix,
+        blocked_native_session_ids=_blocked_backfill_sessions(db, source_ids),
+    )
+
+
+def request_content_backfill(db: Database, source_ids: list[str], *, start_at: str | None = None,
+                             end_at: str | None = None, native_session_ids: list[str] | None = None,
+                             cwd_prefix: str | None = None) -> dict:
+    """Queue explicit, scoped historical content recovery for the local collector.
+
+    Native stores are read by the collector, never by the web process. Changing
+    a content policy alone does not backfill history or alter normal cursors.
+    """
+    selected = _local_backfill_sources(db, source_ids)
+    return Outbox(db.path.parent / "outbox.db").request_content_backfill(
+        selected, start_at=start_at, end_at=end_at,
+        native_session_ids=native_session_ids, cwd_prefix=cwd_prefix,
+        blocked_native_session_ids=_blocked_backfill_sessions(db, source_ids),
+    )
+
+
+def content_backfill_status(db: Database) -> list[dict]:
+    """Return local collector progress without exposing native source paths."""
+    return Outbox(db.path.parent / "outbox.db").content_backfill_status()
+
+
+def purge_deleted_content(db: Database, source_id: str, native_session_id: str) -> dict:
+    """Block a locally deleted session and scrub unsent collector payloads.
+
+    Call only after the server tombstone has committed. The collector's append
+    path checks this durable local block inside its write transaction.
+    """
+    return Outbox(db.path.parent / "outbox.db").block_session(source_id, native_session_id)

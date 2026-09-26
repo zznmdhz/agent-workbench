@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.4 — Windows activity review
+
+- Rebuild Codex child-agent attribution from each source file's primary identity; isolate cumulative counters per file and show cached input as a subset of input. A staged, backup-first repair command is included for data indexed by older releases. The installer does not silently rewrite an existing database.
+- Add scoped historical-text preview and opt-in backfill for retained Codex/Hermes records, with progress, versioned message revisions, redaction/truncation, and deletion tombstones that block local re-import.
+- Make sessions identifiable and renameable; keep date/source filters visible, deep-link to a selected message or run, and paginate long run details without blending later runs.
+- Add source-backed file evidence from successful paired Codex `apply_patch` operations and an explicit local check of the file's current status, size, and modification time. Historical file size remains unknown unless recorded by the source.
+- Clarify coverage, unknown values, token basis, source scan health, process-sample limits, and the distinction between single-day timelines and multi-day trends. Improve keyboard and narrow-screen navigation.
+- Keep incremental and Codex cumulative Token evidence in separate cards and matching drill-downs; stop unknown-ended runs from appearing on later dates, and order filtered sessions by activity inside the selected range.
+- Show source-recorded file operation time separately from current file checks. Offline identity repair refuses SQLite WAL/SHM sidecars that could replay stale data after a swap.
+
 ## 0.2.3 — Dashboard usability and Token evidence
 
 - Fix blue-filled session and timeline rows caused by a broad button selector.

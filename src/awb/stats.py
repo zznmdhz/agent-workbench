@@ -18,8 +18,14 @@ from .db import Database
 
 
 def _metric(metric_id: str, value: Any, unit: str, included: int, excluded: int, note: str = "") -> dict:
+    if value is None:
+        verification = "unavailable"
+    elif metric_id.startswith("counter_") or metric_id in {"input_tokens", "output_tokens"}:
+        verification = "not_source_reconciled"
+    else:
+        verification = "derived_from_recorded_facts"
     return {"id": metric_id, "value": value, "unit": unit, "included_count": included,
-            "excluded_count": excluded, "quality_note": note}
+            "excluded_count": excluded, "quality_note": note, "verification_state": verification}
 
 
 def calculate(db: Database, day: str, tz: str, device_ids: list[str] | None = None,
@@ -62,6 +68,9 @@ def calculate(db: Database, day: str, tz: str, device_ids: list[str] | None = No
         a = _ms(r["start_at"])
         b = _ms(r["end_at"])
         if a is None or a >= end or (b is not None and b <= start):
+            continue
+        if b is None and a < start:
+            # An unknown end is evidence of a start, not indefinite activity.
             continue
         eligible.append(r)
         if start <= a < end:
@@ -127,7 +136,8 @@ def calculate(db: Database, day: str, tz: str, device_ids: list[str] | None = No
     for key, snapshots in cumulative.items():
         dated, loose = cumulative_deltas(snapshots, tz)
         in_range = [x for x in dated if day <= x["day"] <= (through or day)]
-        field = {"codex_input": "counter_input_tokens", "codex_output": "counter_output_tokens"}.get(
+        field = {"codex_input": "counter_input_tokens", "codex_output": "counter_output_tokens",
+                 "codex_cached_input": "counter_cached_input_tokens"}.get(
             snapshots[0]["usage_key"], "total_tokens")
         totals[field] += sum(int(x["amount"]) for x in in_range)
         usage_counts[field] += len(in_range)
@@ -135,12 +145,18 @@ def calculate(db: Database, day: str, tz: str, device_ids: list[str] | None = No
             for item in in_range:
                 daily[item["day"]]["counter_tokens"] += int(item["amount"])
                 device_summary[snapshots[0]["device_id"] or "unknown"]["counter_tokens"] += int(item["amount"])
-        unallocated.extend({"counter": key[:3], **x} for x in loose)
+        for gap in loose:
+            gap_from, gap_until = _ms(gap.get("from")), _ms(gap.get("until"))
+            if gap_until is not None and gap_until < start:
+                continue
+            if gap_from is not None and gap_from >= end:
+                continue
+            unallocated.append({"counter": key[:3], **gap})
     durations_sorted = sorted(complete_durations)
     med = statistics.median(durations_sorted) if durations_sorted else None
     metrics = [
-        _metric("active_wall_ms", union_ms(intervals), "ms", len(intervals), len(eligible)-len(intervals), "并行轮次区间取并集"),
-        _metric("settled_duration_ms", settled_duration_ms, "ms", len(intervals), len(eligible)-len(intervals), "已结算顶层轮次累计时间；并行时间分别计入"),
+        _metric("active_wall_ms", union_ms(intervals) if intervals or not eligible else None, "ms", len(intervals), len(eligible)-len(intervals), "并行轮次区间取并集；只有结束未知的轮次时显示未采集"),
+        _metric("settled_duration_ms", settled_duration_ms if intervals or not eligible else None, "ms", len(intervals), len(eligible)-len(intervals), "已结算顶层轮次累计时间；并行时间分别计入；只有结束未知的轮次时显示未采集"),
         _metric("run_count", len([r for r in eligible if start <= (_ms(r["start_at"]) or -1) < end]), "runs", len(eligible), 0),
         _metric("completed_count", finished_count, "runs", finished_count, 0),
         _metric("duration_mean_ms", round(statistics.mean(durations_sorted)) if durations_sorted else None, "ms", len(durations_sorted), finished_count-len(durations_sorted)),
@@ -151,12 +167,34 @@ def calculate(db: Database, day: str, tz: str, device_ids: list[str] | None = No
         _metric("input_tokens", totals["input_tokens"] if usage_counts["input_tokens"] else None, "tokens", usage_counts["input_tokens"], 0),
         _metric("output_tokens", totals["output_tokens"] if usage_counts["output_tokens"] else None, "tokens", usage_counts["output_tokens"], 0),
         _metric("counter_total_tokens", totals["total_tokens"] if usage_counts["total_tokens"] else None, "tokens", usage_counts["total_tokens"], len(unallocated), "与增量使用量可能重叠，不合并"),
-        _metric("counter_input_tokens", totals["counter_input_tokens"] if usage_counts["counter_input_tokens"] else None, "tokens", usage_counts["counter_input_tokens"], 0, "Codex 会话累计计数的同日差值；不含无法归属的开头余额"),
+        _metric("counter_input_tokens", totals["counter_input_tokens"] if usage_counts["counter_input_tokens"] else None, "tokens", usage_counts["counter_input_tokens"], 0, "Codex 会话累计计数的同日差值；输入包括缓存输入，不可与缓存量相加；不含无法归属的开头余额"),
         _metric("counter_output_tokens", totals["counter_output_tokens"] if usage_counts["counter_output_tokens"] else None, "tokens", usage_counts["counter_output_tokens"], 0, "Codex 会话累计计数的同日差值；不含无法归属的开头余额"),
+        _metric("counter_cached_input_tokens", totals["counter_cached_input_tokens"] if usage_counts["counter_cached_input_tokens"] else None,
+                "tokens", usage_counts["counter_cached_input_tokens"], 0, "缓存输入是输入 Token 的子集，不另加到输入或总量"),
     ]
+    counter_arithmetic_gap = None
+    if all(usage_counts[k] for k in ("counter_input_tokens", "counter_output_tokens", "total_tokens")):
+        counter_arithmetic_gap = totals["total_tokens"] - totals["counter_input_tokens"] - totals["counter_output_tokens"]
+    cached_share = None
+    if usage_counts["counter_cached_input_tokens"] and totals["counter_input_tokens"] > 0:
+        cached_share = totals["counter_cached_input_tokens"] / totals["counter_input_tokens"]
+    warnings = ["仅显示已采集证据；未发现的历史轮次不计入覆盖率"]
+    if counter_arithmetic_gap not in {None, 0}:
+        warnings.append("累计 Token 分项与总量不一致；检查来源覆盖和计数器区间")
+    if cached_share is not None and cached_share > 1:
+        warnings.append("缓存输入超过输入 Token；所选范围的来源区间可能不一致")
     return {"filters": {"day": day, "through": through or day, "tz": tz, "device_ids": list(devices), "agent_ids": list(agents_set), "model_ids": list(models_set)},
             "projection_version": 1, "as_of": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "metrics": metrics, "sources": [dict(r) for r in source_rows], "unallocated_usage": unallocated,
+            "usage_explanation": {"verification_state": "not_source_reconciled",
+                                  "cached_input_is_subset_of_input": True,
+                                  "cached_input_share_of_input": cached_share,
+                                  "non_cached_input_tokens": (totals["counter_input_tokens"] - totals["counter_cached_input_tokens"])
+                                  if cached_share is not None and totals["counter_cached_input_tokens"] <= totals["counter_input_tokens"] else None,
+                                  "counter_arithmetic_gap": counter_arithmetic_gap,
+                                  "arithmetic_note": "分项相加一致只证明展示口径一致，不证明原始事件身份或去重正确。",
+                                  "counter_unallocated_intervals": len(unallocated),
+                                  "incremental_and_cumulative_overlap": "possible_do_not_add"},
             "mixed_model_runs": mixed,
             "daily_trend": [{"day": (date.fromisoformat(day) + timedelta(days=i)).isoformat(),
                              **daily[(date.fromisoformat(day) + timedelta(days=i)).isoformat()]}
@@ -165,7 +203,7 @@ def calculate(db: Database, day: str, tz: str, device_ids: list[str] | None = No
                                    "active_wall_ms": union_ms(item["intervals"]),
                                    **{k: v for k, v in item.items() if k != "intervals"}}
                                   for device_id, item in device_summary.items()],
-            "warnings": ["仅显示已采集证据；未发现的历史轮次不计入覆盖率"]}
+            "warnings": warnings}
 
 
 def _ms(value: str | None) -> int | None:
@@ -177,14 +215,14 @@ def _ms(value: str | None) -> int | None:
 def timeline(db: Database, day: str, tz: str, device_ids: list[str] | None = None,
              agents: list[str] | None = None, models: list[str] | None = None) -> dict:
     start, end = day_bounds_utc_ms(day, tz)
-    start_iso = datetime.fromtimestamp(start / 1000, timezone.utc).isoformat().replace("+00:00", "Z")
-    end_iso = datetime.fromtimestamp(end / 1000, timezone.utc).isoformat().replace("+00:00", "Z")
+    start_iso = datetime.fromtimestamp(start / 1000, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    end_iso = datetime.fromtimestamp(end / 1000, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     with db.read() as conn:
-        rows = conn.execute("""SELECT r.id,r.session_id,r.status,r.start_at,r.end_at,
+        rows = conn.execute("""SELECT r.id,r.native_id,r.session_id,r.status,r.start_at,r.end_at,
             s.agent,s.title,d.name AS device_name,r.device_id,r.model,r.model_attribution,r.parent_run_ref FROM runs r JOIN sessions s ON s.id=r.session_id
             LEFT JOIN devices d ON d.id=r.device_id WHERE s.archived=0 AND r.start_at IS NOT NULL
-            AND r.start_at<? AND (r.end_at IS NULL OR r.end_at>?)
-            ORDER BY r.start_at LIMIT 10000""", (end_iso, start_iso)).fetchall()
+            AND r.start_at<? AND (r.end_at>? OR (r.end_at IS NULL AND r.start_at>=?))
+            ORDER BY r.start_at LIMIT 10000""", (end_iso, start_iso, start_iso)).fetchall()
     items = []
     for row in rows:
         if row["parent_run_ref"]:
@@ -198,6 +236,8 @@ def timeline(db: Database, day: str, tz: str, device_ids: list[str] | None = Non
         a, b = _ms(row["start_at"]), _ms(row["end_at"])
         if a is None or a >= end or (b is not None and b <= start):
             continue
+        if b is None and a < start:
+            continue
         items.append({**dict(row), "visible_start_ms": max(a, start),
                       "visible_end_ms": min(b, end) if b is not None else None,
                       "boundary_quality": "complete" if b is not None and b >= a else "unknown_end"})
@@ -210,7 +250,8 @@ def metric_contributors(db: Database, metric_id: str, day: str, tz: str,
                         agents: list[str] | None = None, models: list[str] | None = None) -> dict:
     """Bounded, source-linked evidence for the six overview cards."""
     supported = {"run_count", "settled_duration_ms", "active_wall_ms", "human_input_chars",
-                 "input_tokens", "output_tokens"}
+                 "input_tokens", "output_tokens", "counter_input_tokens", "counter_output_tokens",
+                 "counter_cached_input_tokens"}
     if metric_id not in supported:
         raise ValueError("Unsupported metric")
     start, _ = day_bounds_utc_ms(day, tz)
@@ -263,21 +304,32 @@ def metric_contributors(db: Database, metric_id: str, day: str, tz: str,
             if row["role"] == "user" and row["input_origin"] == "human" and row["source_char_count"] is not None:
                 amounts[sid] += int(row["source_char_count"])
                 counts[sid] += 1
+                if len(evidence[sid]) < 5:
+                    evidence[sid].append({"message_id": row["id"], "event_id": row["event_id"],
+                                          "at": row["occurred_at"], "amount": int(row["source_char_count"])})
     else:
-        component = "input_tokens" if metric_id == "input_tokens" else "output_tokens"
-        for row in rows:
-            sid, at = row["session_id"], _ms(row["source_time"])
-            if not allowed(sid, row["model"], "reported") or row["semantics"] != "incremental" or at is None or not start <= at < end:
-                continue
-            if row[component] is not None:
-                amounts[sid] += int(row[component])
-                counts[sid] += 1
-        if not amounts:
-            counter_key = "codex_input" if metric_id == "input_tokens" else "codex_output"
+        component = "input_tokens" if metric_id in {"input_tokens", "counter_input_tokens"} else "output_tokens"
+        if not metric_id.startswith("counter_"):
+            for row in rows:
+                sid, at = row["session_id"], _ms(row["source_time"])
+                if (not allowed(sid, row["model"], "reported") or row["semantics"] != "incremental"
+                        or at is None or not start <= at < end):
+                    continue
+                if row[component] is not None:
+                    amounts[sid] += int(row[component])
+                    counts[sid] += 1
+                    if len(evidence[sid]) < 5:
+                        evidence[sid].append({"event_id": row["event_id"], "at": row["source_time"],
+                                              "amount": int(row[component]), "basis": "incremental"})
+        else:
+            counter_key = {"input_tokens": "codex_input", "output_tokens": "codex_output",
+                           "counter_input_tokens": "codex_input", "counter_output_tokens": "codex_output",
+                           "counter_cached_input_tokens": "codex_cached_input"}[metric_id]
             groups: dict[tuple, list[dict]] = defaultdict(list)
             for row in rows:
                 sid = row["session_id"]
-                if row["semantics"] == "cumulative_snapshot" and row["usage_key"] == counter_key and allowed(sid) and not model_set:
+                if (row["semantics"] == "cumulative_snapshot" and row["usage_key"] == counter_key
+                        and allowed(sid, row["model"], "reported")):
                     groups[(sid, row["counter_id"], row["epoch_id"], row["model"], row["provider"])].append(row)
             for key, snapshots in groups.items():
                 dated, _ = cumulative_deltas(snapshots, tz)
@@ -287,9 +339,24 @@ def metric_contributors(db: Database, metric_id: str, day: str, tz: str,
                     if date.fromisoformat(day) <= local_day <= date.fromisoformat(through or day):
                         amounts[sid] += int(item["amount"])
                         counts[sid] += 1
-    ordered = sorted(amounts, key=lambda sid: (-amounts[sid], sid))
-    return {"metric_id": metric_id, "basis": "counter_interval" if table == "usage_observations" and not any(r["semantics"] == "incremental" for r in rows) else "recorded",
-            "unit": "ms" if metric_id.endswith("_ms") else "count",
+                if amounts[sid] and len(evidence[sid]) < 5:
+                    # Samples are in the selected window; exact delta-to-turn attribution is unavailable.
+                    in_window = [snapshot for snapshot in snapshots
+                                 if (at := _ms(snapshot["source_time"])) is not None and start <= at < end]
+                    for snapshot in sorted(in_window, key=lambda r: (r["source_order"] or 0, r["source_time"] or ""))[-5:]:
+                        if len(evidence[sid]) >= 5:
+                            break
+                        evidence[sid].append({"event_id": snapshot["event_id"], "at": snapshot["source_time"],
+                                              "counter_value": snapshot["total_tokens"],
+                                              "basis": "counter_snapshot_not_turn_attributed"})
+    ordered = sorted((sid for sid, amount in amounts.items() if amount != 0),
+                     key=lambda sid: (-amounts[sid], sid))
+    basis = ("counter_interval" if metric_id.startswith("counter_") else "incremental") if table == "usage_observations" else "recorded"
+    unit = "ms" if metric_id.endswith("_ms") else "tokens" if metric_id.endswith("tokens") else (
+        "codepoints" if metric_id == "human_input_chars" else "runs")
+    return {"metric_id": metric_id, "basis": basis,
+            "verification_state": "not_source_reconciled" if table == "usage_observations" else "derived_from_recorded_facts",
+            "unit": unit,
             "items": [{"session_id": sid, "title": sessions[sid]["title"], "cwd": sessions[sid]["cwd"],
                        "agent": sessions[sid]["agent"], "device_name": sessions[sid]["device_name"],
                        "amount": amounts[sid], "evidence_count": counts[sid], "evidence": evidence[sid]}
