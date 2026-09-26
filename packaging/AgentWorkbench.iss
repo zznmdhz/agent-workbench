@@ -1,4 +1,4 @@
-#define AppVersion "0.2.4"
+#define AppVersion "0.4.0"
 
 [Setup]
 AppId={{AB1AF47D-451C-4C53-8F6D-25016B11DE06}
@@ -22,6 +22,7 @@ RestartApplications=no
 
 [Files]
 Source: "..\.local\package-build\AgentWorkbench\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "..\docs\third_party\CC_SWITCH_LICENSE.txt"; DestDir: "{app}"; DestName: "THIRD-PARTY-CC-SWITCH-LICENSE.txt"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Agent Workbench"; Filename: "{app}\AgentWorkbench.exe"; WorkingDir: "{app}"

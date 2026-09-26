@@ -44,6 +44,8 @@ from .local import (
     set_local_source_policy,
 )
 from .models import Batch
+from .multi_usage import dashboard as mvp_dashboard
+from .multi_usage import session_requests as mvp_session_requests
 from .resources import record_samples
 from .stats import calculate, metric_contributors, timeline
 
@@ -204,7 +206,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     path = Path(db_path or os.environ.get("AWB_DB_PATH", "./data/agent-workbench.db"))
     db = Database(path)
     db.initialize()
-    app = FastAPI(title="Agent Workbench", version="0.2.4")
+    app = FastAPI(title="Agent Workbench", version="0.4.0")
     app.state.db = db
     app.state.desktop_mode = desktop_mode
     app.state.shutdown_callback = None
@@ -242,7 +244,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     def ready():
         with db.read() as conn:
             version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
-        return {"status": "ready", "schema_version": version, "app_version": "0.2.4"}
+        return {"status": "ready", "schema_version": version, "app_version": "0.4.0"}
 
     @app.post("/auth/login")
     def auth_login(body: Credentials, request: Request, response: Response):
@@ -466,6 +468,23 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
             return calculate(db, day, tz, device_ids, agent_ids, model_ids, through)
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, "Invalid day or timezone") from exc
+
+    @app.get("/v1/mvp/usage")
+    def mvp_usage(day: str, through: str | None = None, tz: str = "Asia/Hong_Kong",
+                  agent: str | None = None, model: str | None = None, _: str = Depends(require_owner)):
+        try:
+            return mvp_dashboard(db, day, through or day, tz, agent=agent, model=model)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(422, "Invalid usage date range or timezone") from exc
+
+    @app.get("/v1/mvp/usage/sessions/{agent}/{native_id}/requests")
+    def mvp_usage_session_requests(agent: str, native_id: str, day: str, through: str | None = None,
+                                   tz: str = "Asia/Hong_Kong", model: str | None = None,
+                                   limit: int = Query(100, ge=1, le=200), _: str = Depends(require_owner)):
+        try:
+            return mvp_session_requests(db, agent, native_id, day, through or day, tz, model=model, limit=limit)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(422, "Invalid usage date range or timezone") from exc
 
     @app.get("/v1/timeline")
     def daily_timeline(day: str, tz: str = "Asia/Hong_Kong", device_ids: list[str] = Query(default=[]),

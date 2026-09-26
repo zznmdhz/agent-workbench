@@ -156,6 +156,33 @@ CREATE TABLE IF NOT EXISTS blob_intents(
   expires_at TEXT NOT NULL, fulfilled_at TEXT
 );
 CREATE TABLE IF NOT EXISTS app_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS mvp_usage_requests(
+  request_id TEXT PRIMARY KEY, native_session_id TEXT NOT NULL,
+  occurred_at TEXT NOT NULL, model TEXT NOT NULL,
+  input_tokens INTEGER NOT NULL, cached_input_tokens INTEGER NOT NULL,
+  output_tokens INTEGER NOT NULL, source_file TEXT NOT NULL, source_offset INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_mvp_usage_time ON mvp_usage_requests(occurred_at,model);
+CREATE INDEX IF NOT EXISTS ix_mvp_usage_session ON mvp_usage_requests(native_session_id);
+CREATE INDEX IF NOT EXISTS ix_mvp_usage_file ON mvp_usage_requests(source_file);
+CREATE TABLE IF NOT EXISTS mvp_usage_files(
+  source_file TEXT PRIMARY KEY, size_bytes INTEGER NOT NULL, modified_ns INTEGER NOT NULL,
+  scanned_at TEXT NOT NULL, record_count INTEGER NOT NULL, status TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mvp_claude_requests(
+  request_id TEXT PRIMARY KEY, native_session_id TEXT NOT NULL,
+  occurred_at TEXT NOT NULL, model TEXT NOT NULL,
+  input_tokens INTEGER NOT NULL, cached_input_tokens INTEGER NOT NULL,
+  cache_creation_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
+  cache_read_known INTEGER NOT NULL DEFAULT 1, cache_creation_known INTEGER NOT NULL DEFAULT 1,
+  source_file TEXT NOT NULL, source_offset INTEGER NOT NULL, project TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_mvp_claude_time ON mvp_claude_requests(occurred_at,model);
+CREATE INDEX IF NOT EXISTS ix_mvp_claude_session ON mvp_claude_requests(native_session_id);
+CREATE TABLE IF NOT EXISTS mvp_claude_files(
+  source_file TEXT PRIMARY KEY, size_bytes INTEGER NOT NULL, modified_ns INTEGER NOT NULL,
+  scanned_at TEXT NOT NULL, status TEXT NOT NULL, parser_version TEXT NOT NULL DEFAULT ''
+);
 """
 
 
@@ -179,6 +206,13 @@ class Database:
             db.execute("PRAGMA journal_mode=" + ("WAL" if patched else "DELETE"))
             db.execute("PRAGMA synchronous=FULL")
             db.executescript(SCHEMA)
+            claude_columns = {row[1] for row in db.execute("PRAGMA table_info(mvp_claude_files)")}
+            if "parser_version" not in claude_columns:
+                db.execute("ALTER TABLE mvp_claude_files ADD COLUMN parser_version TEXT NOT NULL DEFAULT ''")
+            request_columns = {row[1] for row in db.execute("PRAGMA table_info(mvp_claude_requests)")}
+            for column in ("cache_read_known", "cache_creation_known"):
+                if column not in request_columns:
+                    db.execute(f"ALTER TABLE mvp_claude_requests ADD COLUMN {column} INTEGER NOT NULL DEFAULT 1")
             try:
                 db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(message_id UNINDEXED, body, tokenize='trigram')")
             except sqlite3.OperationalError:
