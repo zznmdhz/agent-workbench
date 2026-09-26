@@ -156,6 +156,19 @@ CREATE TABLE IF NOT EXISTS blob_intents(
   expires_at TEXT NOT NULL, fulfilled_at TEXT
 );
 CREATE TABLE IF NOT EXISTS app_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS mvp_usage_requests(
+  request_id TEXT PRIMARY KEY, native_session_id TEXT NOT NULL,
+  occurred_at TEXT NOT NULL, model TEXT NOT NULL,
+  input_tokens INTEGER NOT NULL, cached_input_tokens INTEGER NOT NULL,
+  output_tokens INTEGER NOT NULL, source_file TEXT NOT NULL, source_offset INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_mvp_usage_time ON mvp_usage_requests(occurred_at,model);
+CREATE INDEX IF NOT EXISTS ix_mvp_usage_session ON mvp_usage_requests(native_session_id);
+CREATE INDEX IF NOT EXISTS ix_mvp_usage_file ON mvp_usage_requests(source_file);
+CREATE TABLE IF NOT EXISTS mvp_usage_files(
+  source_file TEXT PRIMARY KEY, size_bytes INTEGER NOT NULL, modified_ns INTEGER NOT NULL,
+  scanned_at TEXT NOT NULL, record_count INTEGER NOT NULL, status TEXT NOT NULL
+);
 """
 
 
