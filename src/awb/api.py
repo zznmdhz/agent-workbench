@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import secrets
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -211,6 +212,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     app = FastAPI(title="Agent Workbench", version=__version__)
     app.state.db = db
     app.state.desktop_mode = desktop_mode
+    app.state.local_csrf = secrets.token_urlsafe(24)
     app.state.shutdown_callback = None
     app.state.updater = UpdateManager()
 
@@ -251,6 +253,8 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
 
     @app.post("/auth/login")
     def auth_login(body: Credentials, request: Request, response: Response):
+        if desktop_mode:
+            raise HTTPException(410, "Local desktop password login has been removed")
         subject = request.client.host if request.client else "unknown"
         check_rate(db, "login", subject)
         try:
@@ -264,10 +268,13 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
 
     @app.get("/auth/setup-status")
     def setup_status():
-        return {"needs_setup": not owner_exists(), "web_setup_available": desktop_mode}
+        return {"needs_setup": False if desktop_mode else not owner_exists(),
+                "web_setup_available": False}
 
     @app.post("/auth/setup")
     def auth_setup(body: SetupCredentials, request: Request, response: Response):
+        if desktop_mode:
+            raise HTTPException(410, "Local desktop password setup has been removed")
         require_local_desktop(request)
         if owner_exists():
             raise HTTPException(409, "Owner account already exists")
@@ -303,6 +310,8 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
 
     @app.post("/auth/logout")
     def auth_logout(request: Request, response: Response, _: None = Depends(require_owner_write)):
+        if desktop_mode:
+            raise HTTPException(410, "Local desktop password logout has been removed")
         token = request.cookies.get("awb_session", "")
         with db.tx() as conn:
             conn.execute("DELETE FROM web_sessions WHERE token_hash=?", (token_hash(token),))

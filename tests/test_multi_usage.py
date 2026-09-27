@@ -124,8 +124,7 @@ def test_web_usage_query_accepts_january_to_september_and_agent_filter(tmp_path:
     monkeypatch.setenv("HERMES_STATE_DB", str(hermes))
     client = TestClient(create_app(tmp_path / "web.db", desktop_mode=True),
                         base_url="http://127.0.0.1:8765", client=("127.0.0.1", 50000))
-    assert client.post("/auth/setup", json={"password": "long-enough-123",
-                                             "confirmation": "long-enough-123"}).status_code == 200
+    assert client.get("/auth/me").status_code == 200
     response = client.get("/v1/mvp/usage", params={"day": "2026-01-01", "through": "2026-09-26",
                                                      "tz": "UTC"})
     assert response.status_code == 200

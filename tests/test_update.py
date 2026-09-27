@@ -107,10 +107,7 @@ def test_update_api_is_owner_and_local_desktop_only(tmp_path: Path):
     app = create_app(tmp_path / "workbench.db", desktop_mode=True)
     app.state.shutdown_callback = lambda: None
     local = TestClient(app, base_url="http://127.0.0.1:8765", client=("127.0.0.1", 50000))
-    assert local.get("/v1/local/update").status_code == 401
-    setup = local.post("/auth/setup", json={"password": "long-enough-123",
-                                            "confirmation": "long-enough-123"})
-    csrf = setup.json()["csrf"]
+    csrf = local.get("/auth/me").json()["csrf"]
     assert local.get("/v1/local/update").status_code == 200
     assert local.post("/v1/local/update").status_code == 403
     assert local.post("/v1/local/update", headers={"x-awb-csrf": csrf}).status_code == 409

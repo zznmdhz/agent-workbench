@@ -28,13 +28,6 @@ uv run --frozen --group build pyinstaller --noconfirm --onedir --contents-direct
     --specpath $spec packaging/entrypoint.py
 if ($LASTEXITCODE -ne 0) { throw 'CLI build failed' }
 Copy-Item -LiteralPath (Join-Path $workspace '.local\package-build-cli\AgentWorkbenchCLI\AgentWorkbenchCLI.exe') -Destination $portable -Force
-uv run --frozen --group build pyinstaller --noconfirm --onedir --contents-directory _internal `
-    --windowed --name AgentWorkbenchReset --hidden-import awb.cli --add-data "$workspace\web\dist:web/dist" `
-    --distpath (Join-Path $workspace '.local\package-build-reset') `
-    --workpath (Join-Path $workspace '.local\pyinstaller-reset-work') `
-    --specpath $spec packaging/reset_entrypoint.py
-if ($LASTEXITCODE -ne 0) { throw 'Reset launcher build failed' }
-Copy-Item -LiteralPath (Join-Path $workspace '.local\package-build-reset\AgentWorkbenchReset\AgentWorkbenchReset.exe') -Destination $portable -Force
 if (Test-Path -LiteralPath $portableStage) {
     if (-not $portableStage.StartsWith($workspace + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'Portable stage escaped workspace' }
     Remove-Item -LiteralPath $portableStage -Recurse -Force

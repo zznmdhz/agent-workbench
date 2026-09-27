@@ -7,5 +7,6 @@
 .mvpUnattributed{padding-top:12px;border-top:1px solid #e4ebf4}.mvpUnattributed .mvpBar span{background:#de9942}
 .mvpClickable{cursor:pointer}.mvpClickable:hover{background:#f0f5ff}
 .mvpUpdate{background:#eaf2ff;border:1px solid #a9c7ff;border-radius:8px;padding:12px;color:#244e94;font-size:13px}
+.mvpMain>* , .mvpTwo, .mvpTwo>* , .mvpPanel, .mvpTableWrap{min-width:0}
 @media(max-width:1000px){.mvpSourceGrid{grid-template-columns:1fr}}
 @media(max-width:600px){.mvpTrendRow{grid-template-columns:94px minmax(65px,1fr) 90px}.mvpFilters label{width:100%;justify-content:space-between}.mvpFilters input,.mvpFilters select{min-width:0;width:62%}}

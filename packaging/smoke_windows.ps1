@@ -26,18 +26,13 @@ try {
         throw 'Packaged dashboard asset does not include the custom range control'
     }
     $setupStatus = Invoke-RestMethod -Uri "$base/auth/setup-status"
-    if (-not $setupStatus.web_setup_available) { throw 'Browser setup unavailable in packaged desktop mode' }
-    if ($setupStatus.needs_setup) {
-        $password = 'MvpSmoke-' + [Guid]::NewGuid().ToString('N')
-        $body = @{ password = $password; confirmation = $password } | ConvertTo-Json -Compress
-        $setup = Invoke-RestMethod -Uri "$base/auth/setup" -Method Post -ContentType 'application/json' -Body $body -SessionVariable session
-        $csrf = $setup.csrf
-    } else {
-        throw 'Smoke database was already initialized; use a fresh private database'
-    }
+    if ($setupStatus.needs_setup -or $setupStatus.web_setup_available) { throw 'Desktop still requests password setup' }
+    $me = Invoke-RestMethod -Uri "$base/auth/me"
+    if (-not $me.authenticated -or -not $me.csrf) { throw 'Passwordless local access unavailable' }
+    $csrf = $me.csrf
     $today = (Get-Date).ToString('yyyy-MM-dd')
     $from = '2026-01-01'
-    $usage = Invoke-RestMethod -Uri "$base/v1/mvp/usage?day=$from&through=$today&tz=Asia%2FHong_Kong" -WebSession $session -TimeoutSec 120
+    $usage = Invoke-RestMethod -Uri "$base/v1/mvp/usage?day=$from&through=$today&tz=Asia%2FHong_Kong" -TimeoutSec 120
     if ($usage.status -ne 'ready' -or $usage.summary.requests -le 0) { throw 'Packaged app returned no usage' }
     if ($usage.summary.fresh_input_tokens + $usage.summary.cached_input_tokens + $usage.summary.cache_creation_tokens -ne $usage.summary.input_tokens) {
         throw 'Input and cache totals do not reconcile across agents'
@@ -57,12 +52,12 @@ try {
     if ($usage.sessions.Count -gt 0) {
         $nativeId = [Uri]::EscapeDataString($usage.sessions[0].native_id)
         $agent = $usage.sessions[0].agent
-        $detail = Invoke-RestMethod -Uri "$base/v1/mvp/usage/sessions/$agent/$nativeId/requests?day=$from&through=$today&tz=Asia%2FHong_Kong&limit=100" -WebSession $session
+        $detail = Invoke-RestMethod -Uri "$base/v1/mvp/usage/sessions/$agent/$nativeId/requests?day=$from&through=$today&tz=Asia%2FHong_Kong&limit=100"
         if ($detail.count -le 0) { throw 'Session detail returned no requests' }
     }
     [pscustomobject]@{
         app_version = $ready.app_version
-        web_setup = $setupStatus.web_setup_available
+        passwordless = $me.authenticated
         codex_files = $usage.sources.codex.files
         claude_files = $usage.sources.claude.files
         hermes_status = $usage.sources.hermes.status
@@ -70,7 +65,7 @@ try {
         total_tokens = $usage.summary.total_tokens
         sessions = $usage.session_count
     } | Format-List
-    Invoke-RestMethod -Uri "$base/v1/local/shutdown" -Method Post -WebSession $session -Headers @{ 'x-awb-csrf' = $csrf } | Out-Null
+    Invoke-RestMethod -Uri "$base/v1/local/shutdown" -Method Post -Headers @{ 'x-awb-csrf' = $csrf } | Out-Null
 } finally {
     if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
 }
