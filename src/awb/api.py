@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import __version__
 from .auth import (
     check_rate,
     clear_failures,
@@ -48,6 +49,7 @@ from .multi_usage import dashboard as mvp_dashboard
 from .multi_usage import session_requests as mvp_session_requests
 from .resources import record_samples
 from .stats import calculate, metric_contributors, timeline
+from .update import UpdateManager
 
 
 class Credentials(BaseModel):
@@ -206,10 +208,11 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     path = Path(db_path or os.environ.get("AWB_DB_PATH", "./data/agent-workbench.db"))
     db = Database(path)
     db.initialize()
-    app = FastAPI(title="Agent Workbench", version="0.4.0")
+    app = FastAPI(title="Agent Workbench", version=__version__)
     app.state.db = db
     app.state.desktop_mode = desktop_mode
     app.state.shutdown_callback = None
+    app.state.updater = UpdateManager()
 
     def owner_exists() -> bool:
         with db.read() as conn:
@@ -244,7 +247,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     def ready():
         with db.read() as conn:
             version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
-        return {"status": "ready", "schema_version": version, "app_version": "0.4.0"}
+        return {"status": "ready", "schema_version": version, "app_version": __version__}
 
     @app.post("/auth/login")
     def auth_login(body: Credentials, request: Request, response: Response):
@@ -318,6 +321,21 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
             raise HTTPException(503, "Desktop shutdown unavailable")
         background_tasks.add_task(app.state.shutdown_callback)
         return {"stopping": True}
+
+    @app.get("/v1/local/update")
+    def update_status(request: Request, check: bool = False, _: str = Depends(require_owner)):
+        require_local_desktop(request)
+        return app.state.updater.check() if check else app.state.updater.status()
+
+    @app.post("/v1/local/update")
+    def update_start(request: Request, _: None = Depends(require_owner_write)):
+        require_local_desktop(request)
+        if app.state.shutdown_callback is None:
+            raise HTTPException(503, "Desktop shutdown unavailable")
+        try:
+            return app.state.updater.start(app.state.shutdown_callback)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
 
     @app.post("/v1/pairing-codes")
     def pairing_code(_: None = Depends(require_owner_write)):

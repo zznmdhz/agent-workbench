@@ -13,6 +13,7 @@ from threading import Event, Thread
 import httpx
 import uvicorn
 
+from . import __version__
 from .db import Database
 
 
@@ -54,7 +55,7 @@ def _is_workbench(url: str) -> bool:
         with httpx.Client(timeout=1) as client:
             result = client.get(url + "/health/ready")
         body = result.json()
-        return result.status_code == 200 and body.get("status") == "ready" and body.get("app_version") == "0.4.0"
+        return result.status_code == 200 and body.get("status") == "ready" and body.get("app_version") == __version__
     except (httpx.HTTPError, ValueError):
         return False
 

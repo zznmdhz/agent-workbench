@@ -10,6 +10,7 @@ type Model=Totals&{agent:Agent,model:string}
 type Session=Totals&{agent:Agent,native_id:string,title:string,last_request:string}
 type Usage={status:string,summary:Totals,sources:Record<Agent,Source>,models:Model[],sessions:Session[],session_count:number,trend:Trend[],trend_granularity:'day'|'week'|'month',unattributed_tokens:number,note:string}
 type Request=Totals&{request_id:string,occurred_at:string,first_seen?:string,model:string,precision:'request'|'session_model_aggregate'}
+type UpdateStatus={available:boolean,current_version:string,state:'idle'|'available'|'current'|'downloading'|'installing'|'error',latest_version:string|null,progress:number,error:string|null}
 const names:Record<Agent,string>={codex:'Codex',claude:'Claude',hermes:'Hermes'}
 const fmt=(n:number)=>new Intl.NumberFormat('zh-CN').format(n)
 const shift=(day:string,n:number)=>{const d=new Date(`${day}T12:00:00Z`);d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10)}
@@ -28,6 +29,7 @@ function App(){
   const [confirmation,setConfirmation]=useState('')
   const [error,setError]=useState('')
   const [stopped,setStopped]=useState(false)
+  const [update,setUpdate]=useState<UpdateStatus|null>(null)
   const [start,setStart]=useState(()=>shift(today(),-6))
   const [end,setEnd]=useState(today)
   const [preset,setPreset]=useState('7')
@@ -43,6 +45,31 @@ function App(){
   const invalidRange=!start||!end||start>end
 
   useEffect(()=>{get<{csrf:string}>('/auth/me').then(x=>{setCsrf(x.csrf);setEntry('login')}).catch(()=>get<{needs_setup:boolean,web_setup_available:boolean}>('/auth/setup-status').then(x=>setEntry(x.needs_setup?(x.web_setup_available?'setup':'unavailable'):'login')).catch(()=>setError('无法连接工作台服务')))},[])
+  useEffect(()=>{
+    if(!csrf)return
+    let cancelled=false
+    get<UpdateStatus>('/v1/local/update?check=true').then(async x=>{
+      if(cancelled)return
+      setUpdate(x)
+      if(x.state==='available'){
+        const started=await post<UpdateStatus>('/v1/local/update',undefined,csrf)
+        if(!cancelled)setUpdate(started)
+      }
+    }).catch(e=>{if(!cancelled)setUpdate({available:true,current_version:'',state:'error',latest_version:null,progress:0,error:String(e)})})
+    return()=>{cancelled=true}
+  },[csrf])
+  useEffect(()=>{
+    if(update?.state!=='downloading'&&update?.state!=='installing')return
+    const timer=window.setInterval(async()=>{
+      try{
+        const ready=await get<{app_version:string}>('/health/ready')
+        if(update.latest_version&&ready.app_version===update.latest_version){window.location.reload();return}
+        const status=await get<UpdateStatus>('/v1/local/update')
+        setUpdate(status)
+      }catch{ /* The old server is expected to stop while the installer runs. */ }
+    },2000)
+    return()=>window.clearInterval(timer)
+  },[update?.state,update?.latest_version])
   useEffect(()=>{
     if(!csrf||invalidRange)return
     let cancelled=false
@@ -72,6 +99,7 @@ function App(){
   async function setup(e:React.FormEvent){e.preventDefault();setError('');if(password.length<12||password!==confirmation){setError('密码至少 12 个字符，且两次输入一致');return}try{const x=await post<{csrf:string}>('/auth/setup',{password,confirmation});setCsrf(x.csrf);setPassword('');setConfirmation('')}catch(e){setError(`设置失败：${String(e)}`)}}
   async function logout(){try{await post('/auth/logout',undefined,csrf)}finally{setCsrf('');setData(null);setSelected(null)}}
   async function shutdown(){if(!window.confirm('关闭工作台？'))return;try{await post('/v1/local/shutdown',undefined,csrf);setStopped(true)}catch(e){setError(String(e))}}
+  async function retryUpdate(){try{setUpdate(await post<UpdateStatus>('/v1/local/update',undefined,csrf))}catch(e){setUpdate(x=>x?{...x,error:String(e)}:x)}}
 
   if(stopped)return <main className="mvpLogin"><div className="mvpLoginCard"><h1>工作台已关闭</h1><p>从开始菜单重新打开即可继续使用。</p></div></main>
   if(!csrf)return <main className="mvpLogin"><div className="mvpLoginCard"><div className="mvpMark">✳</div><h1>{entry==='setup'?'创建管理员密码':'Agent Workbench'}</h1><p>{entry==='setup'?'首次使用，在网页中创建密码。':entry==='login'?'登录后查看本机用量仪表盘。':entry==='checking'?'正在连接…':'请在 Windows 本机打开桌面程序完成设置。'}</p>{(entry==='setup'||entry==='login')&&<form onSubmit={entry==='setup'?setup:login}><label>管理员密码<input autoFocus required type="password" minLength={entry==='setup'?12:undefined} value={password} onChange={e=>setPassword(e.target.value)}/></label>{entry==='setup'&&<label>确认密码<input required type="password" value={confirmation} onChange={e=>setConfirmation(e.target.value)}/></label>}<button type="submit">{entry==='setup'?'创建并进入':'登录'}</button></form>}{error&&<p className="mvpError" role="alert">{error}</p>}</div></main>
@@ -87,7 +115,10 @@ function App(){
     ['输出',fmt(summary.output_tokens),'模型生成的 Token'],
     ['活跃会话',fmt(data!.session_count),'所选范围内有用量的会话'],
   ]:[]
-  return <div className="mvpShell"><header className="mvpHeader"><div className="mvpBrand"><span className="mvpMark">✳</span><span><b>Agent Workbench</b><small>多 Agent 用量</small></span></div><div className="mvpHeaderActions"><button onClick={()=>setTick(x=>x+1)} disabled={loading}>{loading?'同步中…':'刷新'}</button><button onClick={logout}>退出</button><button onClick={shutdown}>关闭工作台</button></div></header><main className="mvpMain"><div className="mvpTitle"><div><p>USAGE / AGENTS</p><h1>用量仪表盘</h1><span>按原始记录核对 Token；不完整的历史范围会明确标示。</span></div><span className="mvpScope">Codex · Claude · Hermes</span></div>
+  return <div className="mvpShell"><header className="mvpHeader"><div className="mvpBrand"><span className="mvpMark">✳</span><span><b>Agent Workbench</b><small>多 Agent 用量 · v{update?.current_version||'0.4.1'}</small></span></div><div className="mvpHeaderActions"><button onClick={()=>setTick(x=>x+1)} disabled={loading}>{loading?'同步中…':'刷新'}</button><button onClick={logout}>退出</button><button onClick={shutdown}>关闭工作台</button></div></header><main className="mvpMain"><div className="mvpTitle"><div><p>USAGE / AGENTS</p><h1>用量仪表盘</h1><span>按原始记录核对 Token；不完整的历史范围会明确标示。</span></div><span className="mvpScope">Codex · Claude · Hermes</span></div>
+    {update?.available&&update.state==='downloading'&&<div className="mvpUpdate" role="status">检测到 v{update.latest_version}，正在自动下载并校验安装包：{update.progress}%</div>}
+    {update?.available&&update.state==='installing'&&<div className="mvpUpdate" role="status">安装包已校验，正在自动关闭旧版、安装并重新打开工作台。请稍候…</div>}
+    {update?.available&&update.state==='error'&&<div className="mvpError" role="alert">自动更新暂时失败：{update.error}。当前版本仍可使用。{update.latest_version&&<button onClick={retryUpdate}>重试更新</button>}</div>}
     <section className="mvpFilters" aria-label="用量筛选"><div className="mvpRange" role="group" aria-label="快捷日期范围">{[1,7,15].map(n=><button key={n} aria-pressed={preset===String(n)} onClick={()=>chooseRange(n)}>{n===1?'今天':`近 ${n} 天`}</button>)}<button aria-pressed={preset==='all'} onClick={allHistory}>全部历史</button></div><label>开始日期 <input type="date" value={start} onChange={e=>{setStart(e.target.value);setPreset('custom');setSelected(null)}}/></label><label>结束日期 <input type="date" value={end} onChange={e=>{setEnd(e.target.value);setPreset('custom');setSelected(null)}}/></label><label>Agent <select value={agent} onChange={e=>{setAgent(e.target.value as Agent|'');setModel('');setSelected(null)}}><option value="">全部 Agent</option>{Object.entries(names).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select></label><label>模型 <select value={model} onChange={e=>{setModel(e.target.value);setSelected(null)}}><option value="">全部模型</option>{choices.map(x=><option key={x} value={x}>{x}</option>)}</select></label></section>
     {invalidRange&&<div className="mvpError" role="alert">开始日期不能晚于结束日期。</div>}{error&&<div className="mvpError" role="alert">{error}</div>}
     {data&&<p className="mvpProvenance">查询：{start} 至 {end}，香港时间。{data.note} 原生记录未提供的缓存字段无法补算，显示的总量可能偏低；费用尚未计价。{loading?' 正在同步本机日志…':''}</p>}

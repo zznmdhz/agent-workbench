@@ -1,12 +1,12 @@
 # Agent Workbench
 
-Windows 本机多 Agent 用量工作台。当前 **v0.4.0 是用量测试版**：只读扫描 Codex、Claude Code 原生会话日志，以及 Hermes 本机 `state.db`，不修改原始记录。
+Windows 本机多 Agent 用量工作台。当前 **v0.4.1 是用量测试版**：只读扫描 Codex、Claude Code 原生会话日志，以及 Hermes 本机 `state.db`，不修改原始记录。
 
 仪表盘可按任意起止日期（最长十年）、Agent 与模型筛选，请求、输入、缓存读取／写入、输出、趋势、模型和会话联动展示。Codex 与 Claude Code 可按请求时间归属；Hermes 当前只有会话／模型汇总，完整落在所选时间段内的记录会计入总数，但无法准确拆到每天；跨越查询边界的汇总记录会单独计数并暂不纳入。详情见[多 Agent 用量口径](docs/project/MULTI_AGENT_USAGE_V0.4.md)。价格、聊天正文、文件和跨设备管理尚未纳入此版本。
 
 ## Windows 安装与测试
 
-从 [Releases](https://github.com/zznmdhz/agent-workbench/releases) 下载 `AgentWorkbench-Setup-0.4.0-Windows-x64.exe`，双击安装，从开始菜单打开 **Agent Workbench**。浏览器会自动打开本机页面，首次在网页创建至少 12 位密码。普通用户无需命令行。详细步骤及验收清单见 [Windows 测试说明](docs/MVP_WINDOWS_TEST.md)。便携 ZIP 也可直接解压运行，但请勿与安装版同时开启。
+从 [Releases](https://github.com/zznmdhz/agent-workbench/releases) 下载 `AgentWorkbench-Setup-0.4.1-Windows-x64.exe`，双击安装，从开始菜单打开 **Agent Workbench**。浏览器会自动打开本机页面，首次在网页创建至少 12 位密码。普通用户无需命令行。v0.4.1 起，安装版登录后会自动检查 GitHub 发布、下载并校验新安装包，然后关闭旧进程、静默安装并重新打开。安装器也会先通知运行中的工作台退出，再处理占用文件。v0.4.0 及更早版本尚无内置更新器，需要这一次手动安装 v0.4.1。详细步骤及验收清单见 [Windows 测试说明](docs/MVP_WINDOWS_TEST.md)。便携 ZIP 保持手动替换，不与安装版同时开启。
 
 ## 数据来源与对账
 

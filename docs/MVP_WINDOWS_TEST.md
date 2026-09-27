@@ -1,8 +1,8 @@
-# Windows v0.4.0 多 Agent 用量测试
+# Windows v0.4.1 多 Agent 用量测试
 
 ## 安装
 
-若旧版工作台正在运行，先在网页点击“关闭工作台”。从 [GitHub Releases](https://github.com/zznmdhz/agent-workbench/releases) 下载 `AgentWorkbench-Setup-0.4.0-Windows-x64.exe`，双击安装。从开始菜单打开 **Agent Workbench**，浏览器会自动打开 `http://127.0.0.1:8765/`。首次在网页创建至少 12 位密码，无需命令窗口。若电脑上已有 v0.3.0，直接安装新版即可继续使用原工作台数据；新来源第一次读取可能需要几十秒。
+从 [GitHub Releases](https://github.com/zznmdhz/agent-workbench/releases) 下载 `AgentWorkbench-Setup-0.4.1-Windows-x64.exe`，双击安装。即使旧版仍运行，新安装器也会先让它退出，然后再替换文件。从开始菜单打开 **Agent Workbench**，浏览器会自动打开 `http://127.0.0.1:8765/`。首次在网页创建至少 12 位密码，无需命令窗口。若电脑上已有旧版，安装新版会继续使用原工作台数据；新来源第一次读取可能需要几十秒。v0.4.1 是从旧版升级到自动更新机制的一次手动安装；以后登录后会自动检测、校验并安装 GitHub 上更高版本的 Windows 安装包。
 
 ## 测试步骤
 
