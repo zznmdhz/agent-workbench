@@ -1,5 +1,7 @@
 # Agent Workbench
 
+各版本功能变化见 [更新日志](CHANGELOG.md)；已发布安装包与对应发布说明见 [GitHub Releases](https://github.com/zznmdhz/agent-workbench/releases)。开发测试版与已发布安装包的验证范围不同。
+
 本机多 Agent 用量与会话工作台。当前开发分支为 **v0.5.1 测试版**：只读扫描 Codex、Claude Code 原生会话日志，以及 Hermes 本机 `state.db`，不修改原始记录。代码同时支持 macOS 和 Windows；v0.5.1 在 Mac 上构建和验证，Windows 安装包仍待实机验证。GitHub Releases 当前公开的 Windows 安装包为 v0.4.1。
 
 v0.5.1 本机应用已移除密码页，打开 `http://127.0.0.1:8765/` 即可查看仪表盘。已发布的 v0.4.1 Windows 安装包仍使用旧密码流程。

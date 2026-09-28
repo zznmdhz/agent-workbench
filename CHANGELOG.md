@@ -80,3 +80,8 @@
 - Verified installation, synthetic end-to-end collection, real Windows stats-only import, and backup/restore.
 
 Mac/NAS deployment and real cross-machine continuation remain outside this Windows release. The installer is not code-signed and does not add login autostart or automatic updates.
+
+## 0.1.0-preview.1 — Windows portable preview
+
+- Provide a Windows portable ZIP started with `Start-AgentWorkbench.cmd`, local owner password setup, and a browser page at `127.0.0.1:8765`.
+- Include Codex/Hermes collection instructions in the portable package. Startup, readiness, web assets and login passed a Windows smoke test; Mac/NAS and dual-machine continuation were not validated.
