@@ -21,6 +21,7 @@ from . import __version__
 from .activity import conversation as mvp_conversation
 from .activity import dashboard as mvp_activity_dashboard
 from .activity import session_browser as mvp_session_browser
+from .activity import session_inspector as mvp_session_inspector
 from .auth import (
     check_rate,
     clear_failures,
@@ -544,11 +545,20 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     @app.get("/v1/mvp/activity/sessions")
     def mvp_activity_sessions(day: str, through: str | None = None,
                               tz: str = "Asia/Hong_Kong", agent: str | None = None,
+                              q: str = "",
                               _: str = Depends(require_owner)):
         try:
-            return mvp_session_browser(db, day, through or day, tz, agent=agent)
+            return mvp_session_browser(db, day, through or day, tz, agent=agent, query=q)
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, "Invalid session date range or timezone") from exc
+
+    @app.get("/v1/mvp/activity/sessions/{agent}/{native_id}/inspector")
+    def mvp_activity_session_inspector(agent: str, native_id: str,
+                                       _: str = Depends(require_owner)):
+        try:
+            return mvp_session_inspector(db, agent, native_id)
+        except ValueError as exc:
+            raise HTTPException(422, "Invalid session source") from exc
 
     @app.get("/v1/timeline")
     def daily_timeline(day: str, tz: str = "Asia/Hong_Kong", device_ids: list[str] = Query(default=[]),

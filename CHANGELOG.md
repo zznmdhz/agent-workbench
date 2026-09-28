@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.2 — Session inspector and local search (unreleased)
+
+- Place the conversation list and selected session detail in side-by-side panes on desktop, with a list-to-detail flow on narrow screens.
+- Add debounced local search across titles, indexed conversation text, and recorded file/tool paths within the selected date range and Agent.
+- Show source record locations, source-reported working directory, disk size, and chronological file operations. Distinguish confirmed tool results from unverified nested patch paths; never infer per-session RAM or claim that unobserved files do not exist.
+- Index Codex and Claude sources incrementally, inspect Hermes file-tool results on demand, and keep all indexed text and paths on the local device.
+
 ## 0.5.1 — Conversation browsing controls (unreleased)
 
 - Remove the dense per-run timeline from the dashboard while keeping elapsed-time summaries and the time heatmap.
