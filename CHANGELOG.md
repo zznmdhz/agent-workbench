@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 — Conversation browsing controls (unreleased)
+
+- Remove the dense per-run timeline from the dashboard while keeping elapsed-time summaries and the time heatmap.
+- Add independent single-day/date-range controls and All/Codex/Claude/Hermes switching to the conversation list; open messages within the same selected range.
+- Build and verify the macOS test app; keep the Windows build and version paths aligned pending Windows device testing.
+
 ## 0.5.0 — Local conversation and elapsed-time review (unreleased)
 
 - Add a Token/time switch to the shared year, month, week and day heatmap.

@@ -1,10 +1,10 @@
 # Agent Workbench
 
-本机多 Agent 用量与会话工作台。当前开发分支为 **v0.5.0 测试版**：只读扫描 Codex、Claude Code 原生会话日志，以及 Hermes 本机 `state.db`，不修改原始记录。代码同时支持 macOS 和 Windows；v0.5.0 已在 Mac 上构建和验证，Windows 安装包仍待实机验证。GitHub Releases 当前公开的 Windows 安装包为 v0.4.1。
+本机多 Agent 用量与会话工作台。当前开发分支为 **v0.5.1 测试版**：只读扫描 Codex、Claude Code 原生会话日志，以及 Hermes 本机 `state.db`，不修改原始记录。代码同时支持 macOS 和 Windows；v0.5.1 在 Mac 上构建和验证，Windows 安装包仍待实机验证。GitHub Releases 当前公开的 Windows 安装包为 v0.4.1。
 
-v0.5.0 本机应用已移除密码页，打开 `http://127.0.0.1:8765/` 即可查看仪表盘。已发布的 v0.4.1 Windows 安装包仍使用旧密码流程。
+v0.5.1 本机应用已移除密码页，打开 `http://127.0.0.1:8765/` 即可查看仪表盘。已发布的 v0.4.1 Windows 安装包仍使用旧密码流程。
 
-v0.5.0 仪表盘可按日期、Agent 与模型筛选 Token 用量，并通过两个按钮切换 Token／运行时间热力图；两个视图共用年／月／周／日导航。选一天可查看三种 Agent 的会话、时间轴和当天用户／Agent 文字消息。时间同时显示各 Agent 运行区间相加的累计时长与并行去重后的自然经过时间。Codex 有完整任务事件时使用源记录时长；缺事件的 Codex、Claude 和 Hermes 仅能按消息推算，界面会标明估算。Hermes Token 仍只有会话／模型汇总，不能准确拆到每天。完整口径见[会话与时间说明](docs/project/SESSION_TIME_V0.5.md)。当前数字只来自运行应用的这台电脑，Mac 与 Windows 尚未同步；跨设备方案见[多 Agent 用量口径](docs/project/MULTI_AGENT_USAGE_V0.4.md)。价格、工具轨迹、文件和跨设备管理尚未纳入此版本。
+v0.5.1 仪表盘可按日期、Agent 与模型筛选 Token 用量，并通过两个按钮切换 Token／运行时间热力图；两个视图共用年／月／周／日导航。会话记录区可独立选一天或日期范围，并快速切换全部、Codex、Claude、Hermes，打开后只看所选时段的用户／Agent 文字消息。时间同时显示各 Agent 运行区间相加的累计时长与并行去重后的自然经过时间。Codex 有完整任务事件时使用源记录时长；缺事件的 Codex、Claude 和 Hermes 仅能按消息推算，界面会标明估算。Hermes Token 仍只有会话／模型汇总，不能准确拆到每天。完整口径见[会话与时间说明](docs/project/SESSION_TIME_V0.5.md)。当前数字只来自运行应用的这台电脑，Mac 与 Windows 尚未同步；跨设备方案见[多 Agent 用量口径](docs/project/MULTI_AGENT_USAGE_V0.4.md)。价格、工具轨迹、文件和跨设备管理尚未纳入此版本。
 
 ## Windows 安装与测试
 

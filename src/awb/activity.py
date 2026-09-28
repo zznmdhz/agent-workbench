@@ -278,7 +278,7 @@ def _bucket_bounds(key: str, grain: str, zone: ZoneInfo) -> tuple[datetime, date
 
 def dashboard(db: Database, day: str, through: str, tz: str, *,
               heatmap_view: str = 'year', focus_day: str | None = None,
-              agent: str | None = None, sync: bool = True,
+              agent: str | None = None, sync: bool = True, session_range: bool = False,
               codex_root: Path | None = None, claude_root: Path | None = None,
               hermes_path: Path | None = None) -> dict:
     if agent not in {None, 'codex', 'claude', 'hermes'}:
@@ -334,7 +334,8 @@ def dashboard(db: Database, day: str, through: str, tz: str, *,
         bucket_start, bucket_end = _bucket_bounds(key, grain, zone)
         heatmap.append({'period': key, **measure(selected, max(bucket_start, range_start),
                                                  min(bucket_end, range_end))})
-    focus_start, focus_end = _bucket_bounds(focus.isoformat(), 'day', zone)
+    focus_start, focus_end = ((range_start, range_end) if session_range else
+                              _bucket_bounds(focus.isoformat(), 'day', zone))
     focus_runs = [r for r in intervals if r['start'] < focus_end and r['end'] > focus_start]
     focus_messages = [r for r in messages if focus_start <= _dt(r['occurred_at']) < focus_end
                       and agent in (None, r['agent'])]
@@ -353,18 +354,21 @@ def dashboard(db: Database, day: str, through: str, tz: str, *,
             item['preview'] = row['preview']
     for run in focus_runs:
         key = (run['agent'], run['native_id'])
-        at = run['start'].isoformat()
-        grouped.setdefault(key, {'agent': key[0], 'native_id': key[1], 'title': '',
-                                 'first_at': at, 'last_at': run['end'].isoformat(),
-                                 'messages': 0, 'preview': ''})
+        at = _iso(max(run['start'], focus_start).timestamp())
+        end_at = _iso(min(run['end'], focus_end).timestamp())
+        item = grouped.setdefault(key, {'agent': key[0], 'native_id': key[1], 'title': '',
+                                        'first_at': at, 'last_at': end_at,
+                                        'messages': 0, 'preview': ''})
+        item['first_at'] = min(item['first_at'], at)
+        item['last_at'] = max(item['last_at'], end_at)
     sessions = []
     for key, item in grouped.items():
         item['title'] = titles.get(key[1]) or item['preview'][:80] or f'{key[0]} · {key[1][:8]}'
         item.update(measure([r for r in focus_runs if (r['agent'], r['native_id']) == key],
                             focus_start, focus_end))
         sessions.append(item)
-    sessions.sort(key=lambda x: x['first_at'])
-    timeline = sorted([{'agent': r['agent'], 'native_id': r['native_id'],
+    sessions.sort(key=lambda x: x['last_at'], reverse=session_range)
+    timeline = [] if session_range else sorted([{'agent': r['agent'], 'native_id': r['native_id'],
                         'start_at': max(r['start'], focus_start).isoformat(),
                         'end_at': min(r['end'], focus_end).isoformat(),
                         'precision': r['precision']} for r in focus_runs], key=lambda x: x['start_at'])
@@ -374,16 +378,33 @@ def dashboard(db: Database, day: str, through: str, tz: str, *,
             'note': 'Codex 有完整任务事件时用源记录时间，缺事件的会话仅按消息估算；Claude/Hermes 按用户输入至最终回复估算。超过六小时或未结束的估算片段不计入。'}
 
 
+def session_browser(db: Database, day: str, through: str, tz: str, *,
+                    agent: str | None = None, sync: bool = True,
+                    codex_root: Path | None = None, claude_root: Path | None = None,
+                    hermes_path: Path | None = None) -> dict:
+    if agent not in {None, 'codex', 'claude', 'hermes'}:
+        raise ValueError('Invalid agent')
+    result = dashboard(db, day, through, tz, heatmap_view='custom',
+                       session_range=True, sync=sync, codex_root=codex_root,
+                       claude_root=claude_root, hermes_path=hermes_path)
+    sessions = result['sessions']
+    counts = {name: sum(row['agent'] == name for row in sessions)
+              for name in ('codex', 'claude', 'hermes')}
+    return {'day': day, 'through': through, 'counts': counts,
+            'session_count': len(sessions),
+            'sessions': [row for row in sessions if agent in (None, row['agent'])]}
+
+
 def conversation(db: Database, agent: str, native_id: str, *, offset: int = 0,
-                 limit: int = 100, day: str | None = None, tz: str = 'Asia/Hong_Kong',
+                 limit: int = 100, day: str | None = None, through: str | None = None,
+                 tz: str = 'Asia/Hong_Kong',
                  codex_root: Path | None = None,
                  claude_root: Path | None = None, hermes_path: Path | None = None) -> dict:
     if agent not in {'codex', 'claude', 'hermes'}:
         raise ValueError('Invalid agent')
     start = end = None
     if day:
-        zone = ZoneInfo(tz)
-        start, end = _bucket_bounds(date.fromisoformat(day).isoformat(), 'day', zone)
+        _, _, start, end, _ = _range(day, through or day, tz)
     if agent == 'hermes':
         path = hermes_path or hermes_db_path()
         if not path.is_file():

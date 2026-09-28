@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from awb.activity import conversation, dashboard, sync_activity
+from awb.activity import conversation, dashboard, session_browser, sync_activity
 from awb.db import Database
 
 
@@ -62,6 +62,33 @@ def test_cross_midnight_interval_is_split_by_local_day(tmp_path: Path) -> None:
                        claude_root=tmp_path)
     assert first['summary']['agent_ms'] == second['summary']['agent_ms'] == 10 * 60_000
     assert first['summary']['wall_ms'] + second['summary']['wall_ms'] == 20 * 60_000
+
+
+def test_session_browser_date_range_and_agent_switch(tmp_path: Path) -> None:
+    db = Database(tmp_path / 'app.db')
+    db.initialize()
+    with db.tx() as conn:
+        for ident, stamp in (('codex-1', '2026-09-27T10:00:00Z'),
+                             ('codex-2', '2026-09-28T10:00:00Z')):
+            conn.execute('INSERT INTO mvp_activity_runs VALUES(?,?,?,?,?,?)',
+                         ('codex', ident, f'turn-{ident}', stamp,
+                          stamp.replace('10:00', '10:20'), 'source.jsonl'))
+    hermes = tmp_path / 'hermes.db'
+    _hermes(hermes)
+    kwargs = {'sync': False, 'hermes_path': hermes,
+              'codex_root': tmp_path / 'codex', 'claude_root': tmp_path / 'claude'}
+    daily = session_browser(db, '2026-09-28', '2026-09-28', 'UTC', **kwargs)
+    assert daily['counts'] == {'codex': 1, 'claude': 0, 'hermes': 1}
+    assert daily['session_count'] == 2
+    whole = session_browser(db, '2026-09-27', '2026-09-28', 'UTC', **kwargs)
+    assert whole['counts']['codex'] == 2 and whole['session_count'] == 3
+    assert whole['sessions'][0]['agent'] == 'hermes'
+    filtered = session_browser(db, '2026-09-27', '2026-09-28', 'UTC', agent='codex', **kwargs)
+    assert [row['native_id'] for row in filtered['sessions']] == ['codex-2', 'codex-1']
+    assert conversation(db, 'hermes', 'hermes-1', day='2026-09-27',
+                        through='2026-09-28', tz='UTC', hermes_path=hermes)['count'] == 2
+    assert conversation(db, 'hermes', 'hermes-1', day='2026-09-27',
+                        tz='UTC', hermes_path=hermes)['count'] == 0
 
 
 def test_codex_source_duration_and_message_body_on_demand(tmp_path: Path) -> None:
