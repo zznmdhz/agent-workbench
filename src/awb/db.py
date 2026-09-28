@@ -202,6 +202,13 @@ CREATE TABLE IF NOT EXISTS mvp_activity_runs(
   PRIMARY KEY(agent,source_file,run_id)
 );
 CREATE INDEX IF NOT EXISTS ix_mvp_activity_runs_time ON mvp_activity_runs(start_at,end_at);
+CREATE TABLE IF NOT EXISTS mvp_activity_file_events(
+  agent TEXT NOT NULL, native_id TEXT NOT NULL, source_file TEXT NOT NULL,
+  event_key TEXT NOT NULL, occurred_at TEXT NOT NULL, native_path TEXT NOT NULL,
+  relation TEXT NOT NULL, evidence TEXT NOT NULL,
+  PRIMARY KEY(agent,source_file,event_key)
+);
+CREATE INDEX IF NOT EXISTS ix_mvp_activity_file_session ON mvp_activity_file_events(agent,native_id,occurred_at);
 """
 
 
@@ -232,6 +239,12 @@ class Database:
             for column in ("cache_read_known", "cache_creation_known"):
                 if column not in request_columns:
                     db.execute(f"ALTER TABLE mvp_claude_requests ADD COLUMN {column} INTEGER NOT NULL DEFAULT 1")
+            activity_columns = {row[1] for row in db.execute("PRAGMA table_info(mvp_activity_messages)")}
+            if "search_body" not in activity_columns:
+                db.execute("ALTER TABLE mvp_activity_messages ADD COLUMN search_body TEXT NOT NULL DEFAULT ''")
+            file_columns = {row[1] for row in db.execute("PRAGMA table_info(mvp_activity_files)")}
+            if "parser_version" not in file_columns:
+                db.execute("ALTER TABLE mvp_activity_files ADD COLUMN parser_version TEXT NOT NULL DEFAULT ''")
             try:
                 db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(message_id UNINDEXED, body, tokenize='trigram')")
             except sqlite3.OperationalError:

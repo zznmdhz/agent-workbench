@@ -13,14 +13,16 @@ type Usage={status:string,summary:Totals,sources:Record<Agent,Source>,models:Mod
 type Request=Totals&{request_id:string,occurred_at:string,first_seen?:string,model:string,precision:'request'|'session_model_aggregate'}
 type TimeCell={period:string,agent_ms:number,wall_ms:number,verified_ms:number,runs:number}
 type TimeTotals=Omit<TimeCell,'period'>
-type DaySession=TimeTotals&{agent:Agent,native_id:string,title:string,first_at:string,last_at:string,messages:number,preview:string}
+type DaySession=TimeTotals&{agent:Agent,native_id:string,title:string,first_at:string,last_at:string,messages:number,preview:string,match?:{type:string,excerpt:string}}
 type Activity={summary:TimeTotals,by_agent:Record<Agent,TimeTotals>,heatmap:TimeCell[],heatmap_granularity:'day'|'hour'|'month',focus_day:string,note:string,source:{updated_files?:number,read_errors?:number,hermes_ready:boolean}}
-type SessionBrowser={day:string,through:string,counts:Record<Agent,number>,session_count:number,sessions:DaySession[]}
+type SessionBrowser={day:string,through:string,query:string,counts:Record<Agent,number>,session_count:number,sessions:DaySession[]}
 type Conversation={count:number,items:{id:string,role:string,occurred_at:string,body:string}[]}
+type SessionInspector={agent:Agent,native_id:string,cwd:string|null,sources:{path:string,bytes:number|null,status:string}[],record_bytes:number|null,payload_bytes:number|null,file_events:{occurred_at:string,native_path:string,relation:string,evidence:string,source_file:string,current_bytes:number|null,current_state:string}[],unique_file_count:number,possible_file_count:number,confirmed_event_count:number,coverage:string}
 type UpdateStatus={available:boolean,current_version:string,state:'idle'|'available'|'current'|'downloading'|'installing'|'error',latest_version:string|null,progress:number,error:string|null}
 type HeatHover={row:Trend|TimeCell,x:number,y:number,below:boolean,note:string}
 const names:Record<Agent,string>={codex:'Codex',claude:'Claude',hermes:'Hermes'}
 const fmt=(n:number)=>new Intl.NumberFormat('zh-CN').format(n)
+const bytes=(n:number|null)=>n===null?'无法单独计算':n<1024?`${fmt(n)} B`:n<1048576?`${(n/1024).toFixed(1)} KB`:`${(n/1048576).toFixed(1)} MB`
 const duration=(ms:number)=>{const m=Math.round(ms/60000);return m>=60?`${Math.floor(m/60)} 小时 ${m%60} 分钟`:m?`${m} 分钟`:ms>0?'<1 分钟':'0 分钟'}
 const shift=(day:string,n:number)=>{const d=new Date(`${day}T12:00:00Z`);d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10)}
 const today=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())
@@ -72,10 +74,16 @@ function App(){
   const [sessionStart,setSessionStart]=useState(today)
   const [sessionEnd,setSessionEnd]=useState(today)
   const [sessionAgent,setSessionAgent]=useState<Agent|''>('')
+  const [sessionSearch,setSessionSearch]=useState('')
+  const [sessionQuery,setSessionQuery]=useState('')
   const [sessionBrowser,setSessionBrowser]=useState<SessionBrowser|null>(null)
   const [sessionLoading,setSessionLoading]=useState(false)
   const [sessionError,setSessionError]=useState('')
   const [daySession,setDaySession]=useState<DaySession|null>(null)
+  const [sessionTab,setSessionTab]=useState<'conversation'|'files'>('conversation')
+  const [inspector,setInspector]=useState<SessionInspector|null>(null)
+  const [inspectorError,setInspectorError]=useState('')
+  const [copiedPath,setCopiedPath]=useState('')
   const [conversation,setConversation]=useState<Conversation|null>(null)
   const [conversationOffset,setConversationOffset]=useState(0)
   const [tick,setTick]=useState(0)
@@ -84,6 +92,8 @@ function App(){
   const [requestCount,setRequestCount]=useState(0)
   const invalidRange=!start||!end||start>end
   const invalidSessionRange=!sessionStart||!sessionEnd||sessionStart>sessionEnd
+
+  useEffect(()=>{const timer=window.setTimeout(()=>setSessionQuery(sessionSearch.trim()),350);return()=>window.clearTimeout(timer)},[sessionSearch])
 
   useEffect(()=>{get<{csrf:string}>('/auth/me').then(x=>setCsrf(x.csrf)).catch(()=>setError('无法连接本机工作台，请重新打开页面'))},[])
   useEffect(()=>{
@@ -147,12 +157,13 @@ function App(){
     let cancelled=false
     const params=new URLSearchParams({day:sessionStart,through:sessionEnd,tz:'Asia/Hong_Kong'})
     if(sessionAgent)params.set('agent',sessionAgent)
+    if(sessionQuery)params.set('q',sessionQuery)
     setSessionLoading(true)
     setSessionBrowser(null)
     setSessionError('')
     get<SessionBrowser>(`/v1/mvp/activity/sessions?${params}`).then(x=>{if(!cancelled){setSessionBrowser(x);setSessionError('')}}).catch(e=>{if(!cancelled)setSessionError(`会话读取失败：${String(e)}`)}).finally(()=>{if(!cancelled)setSessionLoading(false)})
     return()=>{cancelled=true}
-  },[csrf,sessionStart,sessionEnd,sessionAgent,tick,invalidSessionRange])
+  },[csrf,sessionStart,sessionEnd,sessionAgent,sessionQuery,tick,invalidSessionRange])
   useEffect(()=>{
     if(!daySession)return
     let cancelled=false
@@ -161,6 +172,14 @@ function App(){
     get<Conversation>(`/v1/mvp/activity/sessions/${daySession.agent}/${encodeURIComponent(daySession.native_id)}/conversation?${params}`).then(x=>{if(!cancelled)setConversation(x)}).catch(()=>{if(!cancelled)setConversation({items:[],count:0})})
     return()=>{cancelled=true}
   },[daySession,conversationOffset,sessionStart,sessionEnd])
+  useEffect(()=>{
+    if(!daySession){setInspector(null);return}
+    let cancelled=false
+    setInspector(null)
+    setInspectorError('')
+    get<SessionInspector>(`/v1/mvp/activity/sessions/${daySession.agent}/${encodeURIComponent(daySession.native_id)}/inspector`).then(x=>{if(!cancelled)setInspector(x)}).catch(e=>{if(!cancelled)setInspectorError(String(e))})
+    return()=>{cancelled=true}
+  },[daySession,tick])
 
   function chooseRange(days:number){setPreset(String(days));setHeatView(days===1?'day':'custom');setStart(shift(today(),1-days));setEnd(today());setSelected(null)}
   function chooseYear(){setPreset('year');setHeatView('year');setStart(yearStart());setEnd(today());setSelected(null)}
@@ -175,6 +194,8 @@ function App(){
     if(anchor&&view==='day'){setSessionStart(anchor);setSessionEnd(anchor)}
   }
   function chooseSessionRange(days:number){setSessionStart(shift(today(),1-days));setSessionEnd(today());setDaySession(null)}
+  function openSession(row:DaySession){setDaySession(row);setSessionTab('conversation');setConversationOffset(0);setCopiedPath('')}
+  async function copyPath(path:string){try{await navigator.clipboard.writeText(path);setCopiedPath(path)}catch{setCopiedPath('复制失败，请选中文本手动复制')}}
   function switchAgent(value:Agent|''){setAgent(value);setModel('');setSelected(null)}
   function selectModel(value:Model){setAgent(value.agent);setModel(value.model);setSelected(null)}
   async function shutdown(){if(!window.confirm('关闭工作台？'))return;try{await post('/v1/local/shutdown',undefined,csrf);setStopped(true)}catch(e){setError(String(e))}}
@@ -201,7 +222,7 @@ function App(){
     ['输出',fmt(summary.output_tokens),'模型生成的 Token'],
     ['有用量的会话',fmt(data!.session_count),'所选时段有 Token 记录，不代表正在运行'],
   ]:[]
-  return <div className="mvpShell"><header className="mvpHeader"><div className="mvpBrand"><span className="mvpMark">✳</span><span><b>Agent Workbench</b><small>多 Agent 用量 · v{update?.current_version||'0.5.1'}</small></span></div><div className="mvpHeaderActions"><button onClick={()=>setTick(x=>x+1)} disabled={loading}>{loading?'同步中…':'刷新'}</button><button onClick={shutdown}>关闭工作台</button></div></header><main className="mvpMain"><div className="mvpTitle"><div><p>USAGE / AGENTS</p><h1>用量仪表盘</h1><span>按原始记录核对 Token；不完整的历史范围会明确标示。</span></div><span className="mvpScope">当前电脑本地记录 · 未合并其他设备</span><div className="mvpAgentSwitch" role="group" aria-label="切换 Agent"><button aria-pressed={agent===''} onClick={()=>switchAgent('')}>全部</button>{(Object.keys(names) as Agent[]).map(name=><button key={name} aria-pressed={agent===name} onClick={()=>switchAgent(name)}><span className={`mvpAgentIcon ${name}`}>{name==='codex'?'C':name==='claude'?'✳':'H'}</span>{names[name]}</button>)}</div></div>
+  return <div className="mvpShell"><header className="mvpHeader"><div className="mvpBrand"><span className="mvpMark">✳</span><span><b>Agent Workbench</b><small>多 Agent 用量 · v{update?.current_version||'0.5.2'}</small></span></div><div className="mvpHeaderActions"><button onClick={()=>setTick(x=>x+1)} disabled={loading}>{loading?'同步中…':'刷新'}</button><button onClick={shutdown}>关闭工作台</button></div></header><main className="mvpMain"><div className="mvpTitle"><div><p>USAGE / AGENTS</p><h1>用量仪表盘</h1><span>按原始记录核对 Token；不完整的历史范围会明确标示。</span></div><span className="mvpScope">当前电脑本地记录 · 未合并其他设备</span><div className="mvpAgentSwitch" role="group" aria-label="切换 Agent"><button aria-pressed={agent===''} onClick={()=>switchAgent('')}>全部</button>{(Object.keys(names) as Agent[]).map(name=><button key={name} aria-pressed={agent===name} onClick={()=>switchAgent(name)}><span className={`mvpAgentIcon ${name}`}>{name==='codex'?'C':name==='claude'?'✳':'H'}</span>{names[name]}</button>)}</div></div>
     {update?.available&&update.state==='downloading'&&<div className="mvpUpdate" role="status">检测到 v{update.latest_version}，正在自动下载并校验安装包：{update.progress}%</div>}
     {update?.available&&update.state==='installing'&&<div className="mvpUpdate" role="status">安装包已校验，正在自动关闭旧版、安装并重新打开工作台。请稍候…</div>}
     {update?.available&&update.state==='error'&&<div className="mvpError" role="alert">自动更新暂时失败：{update.error}。当前版本仍可使用。{update.latest_version&&<button onClick={retryUpdate}>重试更新</button>}</div>}
@@ -241,13 +262,36 @@ function App(){
       {activityLoading&&!activity&&<p className="mvpEmpty">正在索引这台电脑的会话记录，首次读取可能需要几分钟…</p>}
       {activity&&<><div className="mvpTimeSummary"><div><small>全部 Agent 累计</small><strong>{duration(activity.summary.agent_ms)}</strong><span>{fmt(activity.summary.runs)} 段任务／估算片段</span></div><div><small>自然经过（并行去重）</small><strong>{duration(activity.summary.wall_ms)}</strong><span>所选日期范围的时间并集</span></div><div><small>其中已证实</small><strong>{duration(activity.summary.verified_ms)}</strong><span>Codex 已完成顶层任务</span></div>{(Object.keys(names) as Agent[]).map(name=><div key={name}><small>{names[name]} 累计 / 去重</small><strong>{duration(activity.by_agent[name].agent_ms)}</strong><span>去重 {duration(activity.by_agent[name].wall_ms)}{name!=='codex'||activity.by_agent.codex.agent_ms>activity.by_agent.codex.verified_ms?' · 含估算':''}</span></div>)}</div><p className="mvpProvenance">{activity.note}</p></>}
     </section>
-    <section className="mvpPanel mvpSessionBrowser"><div className="mvpPanelHead"><div><h2>会话记录</h2><p>选择一天或一段时间，快速切换 Agent 查看对话。</p></div><span>{sessionBrowser?`共 ${fmt(sessionBrowser.session_count)} 个会话`:''}</span></div>
+    <section className="mvpPanel mvpSessionBrowser"><div className="mvpPanelHead"><div><h2>会话记录</h2><p>按日期、Agent 和关键词找到会话；右侧查看对话及文件线索。</p></div><span>{sessionBrowser?`共 ${fmt(sessionBrowser.session_count)} 个会话`:''}</span></div>
       <div className="mvpSessionControls"><div className="mvpRange" role="group" aria-label="会话快捷日期范围">{[1,7,30].map(n=><button key={n} aria-pressed={sessionStart===shift(today(),1-n)&&sessionEnd===today()} onClick={()=>chooseSessionRange(n)}>{n===1?'今天':`近 ${n} 天`}</button>)}</div><label>开始日期 <input type="date" value={sessionStart} onChange={e=>{setSessionStart(e.target.value);setDaySession(null)}}/></label><label>结束日期 <input type="date" value={sessionEnd} onChange={e=>{setSessionEnd(e.target.value);setDaySession(null)}}/></label></div>
       <div className="mvpSessionAgentSwitch" role="group" aria-label="会话 Agent"><button aria-pressed={sessionAgent===''} onClick={()=>{setSessionAgent('');setDaySession(null)}}>全部 {sessionBrowser?.session_count??''}</button>{(Object.keys(names) as Agent[]).map(name=><button key={name} aria-pressed={sessionAgent===name} onClick={()=>{setSessionAgent(name);setDaySession(null)}}>{names[name]} {sessionBrowser?.counts[name]??''}</button>)}</div>
-      {invalidSessionRange&&<p className="mvpError" role="alert">会话开始日期不能晚于结束日期。</p>}{sessionError&&<p className="mvpError" role="alert">{sessionError}</p>}{sessionLoading&&<p className="mvpEmpty">正在读取所选时段的会话…</p>}
-      {sessionBrowser&&<><p className="mvpSessionResult">{sessionStart===sessionEnd?sessionStart:`${sessionStart} 至 ${sessionEnd}`} · {sessionAgent?names[sessionAgent]:'全部 Agent'} · {fmt(sessionBrowser.sessions.length)} 个会话，按最近活动排序</p><div className="mvpDaySessions">{sessionBrowser.sessions.map(row=><button key={`${row.agent}:${row.native_id}`} onClick={()=>{setDaySession(row);setConversationOffset(0)}} aria-pressed={daySession?.agent===row.agent&&daySession.native_id===row.native_id}><b>{names[row.agent]} · {row.title}</b><small>{when(row.first_at)}—{when(row.last_at)} · {fmt(row.messages)} 条消息 · Agent {duration(row.agent_ms)} / 去重 {duration(row.wall_ms)}</small><span>{row.preview||'点击查看所选时段的消息或运行记录'}</span></button>)}</div>{!sessionBrowser.sessions.length&&<p className="mvpEmpty">所选时段没有找到该 Agent 的会话消息或已完成任务。</p>}</>}
+      <label className="mvpSessionSearch">搜索标题、对话内容或文件路径 <input type="search" value={sessionSearch} maxLength={120} onChange={e=>{setSessionSearch(e.target.value);setDaySession(null)}} placeholder="输入关键词后自动搜索"/></label>
+      {invalidSessionRange&&<p className="mvpError" role="alert">会话开始日期不能晚于结束日期。</p>}{sessionError&&<p className="mvpError" role="alert">{sessionError}</p>}
+      <p className="mvpSessionResult">{sessionStart===sessionEnd?sessionStart:`${sessionStart} 至 ${sessionEnd}`} · {sessionAgent?names[sessionAgent]:'全部 Agent'} · {sessionBrowser?`${fmt(sessionBrowser.sessions.length)} 个会话，按最近活动排序`:'正在读取…'}{sessionQuery?' · 本机关键词匹配':''}</p>
+      <div className={`mvpSessionWorkspace${daySession?' hasSelection':''}`}>
+        <div className="mvpSessionList" aria-label="会话列表">
+          {sessionLoading&&<p className="mvpEmpty">正在读取所选时段的会话…</p>}
+          {sessionBrowser?.sessions.map(row=><button className="mvpSessionItem" key={`${row.agent}:${row.native_id}`} onClick={()=>openSession(row)} aria-pressed={daySession?.agent===row.agent&&daySession.native_id===row.native_id}><b>{names[row.agent]} · {row.title}</b><small>{when(row.last_at)} · {fmt(row.messages)} 条消息 · Agent {duration(row.agent_ms)}</small><span>{row.match?`${row.match.type}：${row.match.excerpt}`:row.preview||'点击查看会话详情'}</span></button>)}
+          {sessionBrowser&&!sessionBrowser.sessions.length&&<p className="mvpEmpty">没有匹配的会话。可扩大日期范围或换个关键词。</p>}
+        </div>
+        <div className="mvpSessionDetail" aria-label="会话详情">
+          {!daySession?<div className="mvpSessionPlaceholder"><strong>选择左侧会话</strong><span>这里会显示对话、原始记录位置和有证据的文件操作。</span></div>:<>
+            <div className="mvpSessionDetailHead"><button className="mvpMobileBack" onClick={()=>setDaySession(null)}>← 返回会话列表</button><div><small>{names[daySession.agent]} · {when(daySession.last_at)}</small><h3>{daySession.title}</h3><p>{sessionStart===sessionEnd?sessionStart:`${sessionStart} 至 ${sessionEnd}`} · {fmt(daySession.messages)} 条消息 · Agent {duration(daySession.agent_ms)}</p></div></div>
+            <div className="mvpDetailTabs" role="group" aria-label="会话详情视图"><button aria-pressed={sessionTab==='conversation'} onClick={()=>setSessionTab('conversation')}>对话</button><button aria-pressed={sessionTab==='files'} onClick={()=>setSessionTab('files')}>文件与位置 {inspector?`(${inspector.unique_file_count} 已确认)` :''}</button></div>
+            {sessionTab==='conversation'?<><div className="mvpMessages">{conversation?.items.map(row=><article key={row.id} className={row.role}><small>{row.role==='user'?'我':'Agent'} · {when(row.occurred_at)}</small><p>{row.body}</p></article>)}</div>{conversation===null&&<p className="mvpEmpty">正在读取对话…</p>}{conversation?.count===0&&<p className="mvpEmpty">所选时段没有可读取的文字消息。</p>}{conversation&&conversation.count>100&&<div className="mvpConversationPages"><button disabled={conversationOffset===0} onClick={()=>setConversationOffset(x=>Math.max(0,x-100))}>上一页</button><span>{conversationOffset+1}–{Math.min(conversationOffset+100,conversation.count)} / {conversation.count}</span><button disabled={conversationOffset+100>=conversation.count} onClick={()=>setConversationOffset(x=>x+100)}>下一页</button></div>}</>:<div className="mvpFilePanel">
+              {inspectorError&&<p className="mvpError">文件信息读取失败：{inspectorError}</p>}{!inspector&&!inspectorError&&<p className="mvpEmpty">正在读取来源与文件记录…</p>}
+              {inspector&&<><div className="mvpFileSummary"><div><small>原始记录磁盘大小</small><strong>{bytes(inspector.record_bytes)}</strong><span>{daySession.agent==='hermes'?'Hermes 使用共享数据库，不能按会话分摊文件大小':`${inspector.sources.length} 个原始记录文件；不是运行时 RAM`}</span></div><div><small>已确认涉及的文件</small><strong>{fmt(inspector.unique_file_count)}</strong><span>{fmt(inspector.confirmed_event_count)} 次确认操作 · {fmt(inspector.possible_file_count)} 条待核实路径</span></div></div>
+                {daySession.agent==='hermes'&&inspector.payload_bytes!==null&&<p className="mvpFileNote">本会话消息与工具字段约 {bytes(inspector.payload_bytes)}；这不是数据库占用量，也不是 RAM。</p>}
+                <h4>来源位置</h4><div className="mvpPathRows"><div><span>工作目录</span><code>{inspector.cwd||'原始记录未提供'}</code>{inspector.cwd&&<button onClick={()=>void copyPath(inspector.cwd!)}>复制</button>}</div>{inspector.sources.map(row=><div key={row.path}><span>{row.status==='shared_database'?'共享数据库':'会话原始记录'}</span><code>{row.path}</code><small>{row.bytes===null?'大小未能单独计算':bytes(row.bytes)}</small><button onClick={()=>void copyPath(row.path)}>复制</button></div>)}</div>
+                {copiedPath&&<p className="mvpCopyStatus" role="status">{copiedPath==='复制失败，请选中文本手动复制'?copiedPath:'路径已复制'}</p>}
+                <h4>文件操作历史</h4><p className="mvpFileNote">{inspector.coverage} 当前文件状态仅是打开详情时的本机检查。</p>
+                {inspector.file_events.length?<div className="mvpFileEvents">{inspector.file_events.map((event,index)=><article key={`${event.source_file}:${event.native_path}:${index}`}><div><b>{event.relation==='referenced'?'待核实路径':event.relation==='created'?'创建':event.relation==='deleted'?'删除':event.relation==='created/modified'?'写入':'修改'}</b><small>{when(event.occurred_at)} · {event.evidence}</small></div><code>{event.native_path}</code><small>当前：{event.current_state==='present'?`存在 · ${bytes(event.current_bytes)}`:event.current_state==='missing'?'未找到':'无法检查'}</small><button onClick={()=>void copyPath(event.native_path)}>复制路径</button></article>)}</div>:<p className="mvpEmpty">尚未取得文件操作线索；不能据此判定会话没有产出文件。</p>}
+              </>}
+            </div>}
+          </>}
+        </div>
+      </div>
     </section>
-    {daySession&&<section className="mvpPanel mvpConversation"><div className="mvpPanelHead"><div><h2>{names[daySession.agent]} · {daySession.title}</h2><p>{sessionStart===sessionEnd?sessionStart:`${sessionStart} 至 ${sessionEnd}`} 的用户／Agent 文字消息 · {conversation?`共 ${fmt(conversation.count)} 条，当前第 ${conversation.count?conversationOffset+1:0} 条起`:'正在加载…'}</p></div><button onClick={()=>setDaySession(null)}>关闭</button></div><div className="mvpMessages">{conversation?.items.map(row=><article key={row.id} className={row.role}><small>{row.role==='user'?'我':'Agent'} · {when(row.occurred_at)}</small><p>{row.body}</p></article>)}</div>{conversation?.count===0&&<p className="mvpEmpty">所选时段没有可读取的文字消息。</p>}{conversation&&conversation.count>100&&<div className="mvpConversationPages"><button disabled={conversationOffset===0} onClick={()=>setConversationOffset(x=>Math.max(0,x-100))}>上一页</button><button disabled={conversationOffset+100>=conversation.count} onClick={()=>setConversationOffset(x=>x+100)}>下一页</button></div>}</section>}
     <div className="mvpTwo"><section className="mvpPanel"><div className="mvpPanelHead"><h2>模型用量</h2><span>点击行筛选模型</span></div><div className="mvpTableWrap"><table><thead><tr><th>Agent</th><th>模型</th><th>请求／调用</th><th>新输入</th><th>缓存读</th><th>缓存写</th><th>输出</th><th>处理总量</th></tr></thead><tbody>{data?.models.map(row=><tr key={`${row.agent}:${row.model}`}><td>{names[row.agent]}</td><td><button className="mvpModelButton" onClick={()=>selectModel(row)} aria-label={`筛选 ${names[row.agent]} 的 ${row.model}`}>{row.model}</button></td><td>{fmt(row.requests)}</td><td>{fmt(row.fresh_input_tokens)}</td><td>{fmt(row.cached_input_tokens)}</td><td>{fmt(row.cache_creation_tokens)}</td><td>{fmt(row.output_tokens)}</td><td>{fmt(row.total_tokens)}</td></tr>)}</tbody></table></div>{!data?.models.length&&<p className="mvpEmpty">所选范围没有可核对的用量记录</p>}</section><section className="mvpPanel"><div className="mvpPanelHead"><div><h2>所选时段会话</h2><p>筛选日期内有用量记录的会话，并非正在运行的对话。</p></div><span>共 {fmt(data?.session_count||0)} 条{(data?.session_count||0)>(data?.sessions.length||0)?` · 显示最近 ${data?.sessions.length}`:''}</span></div><div className="mvpSessions">{data?.sessions.map(row=><button key={`${row.agent}:${row.native_id}`} onClick={()=>setSelected(row)} aria-pressed={selected?.native_id===row.native_id&&selected.agent===row.agent}><b title={row.title}>{names[row.agent]} · {row.title}</b><small>{when(row.last_request)} · {fmt(row.requests)} {row.agent==='hermes'?'调用':'请求'} · {fmt(row.total_tokens)} Token</small></button>)}</div>{!data?.sessions.length&&<p className="mvpEmpty">所选时段没有可关联的会话</p>}</section></div>
     {selected&&<section className="mvpPanel"><div className="mvpPanelHead"><div><h2>{names[selected.agent]} · {selected.title}</h2><p>{selected.agent==='hermes'?'以下是会话／模型汇总，不是逐请求记录，也无法拆分到某一天。':`共 ${requestCount} 条请求；显示最近 100 条。`}</p></div><button onClick={()=>setSelected(null)}>关闭</button></div><div className="mvpTableWrap"><table><thead><tr><th>{selected.agent==='hermes'?'末次使用':'时间'}</th><th>模型</th><th>新输入</th><th>缓存读</th><th>缓存写</th><th>输出</th><th>总量</th></tr></thead><tbody>{requests?.map(row=><tr key={row.request_id}><td>{when(row.occurred_at)}</td><td>{row.model}</td><td>{fmt(row.fresh_input_tokens)}</td><td>{fmt(row.cached_input_tokens)}</td><td>{fmt(row.cache_creation_tokens)}</td><td>{fmt(row.output_tokens)}</td><td>{fmt(row.total_tokens)}</td></tr>)}</tbody></table></div>{requests===null&&<p className="mvpEmpty">正在加载用量记录…</p>}</section>}
     <p className="mvpFoot">本机记录包含 Token 用量与会话时间；跨设备数据仍需在各设备采集后同步。源日志不存在的时段不会被补造。</p></main></div>

@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from awb.activity import conversation, dashboard, session_browser, sync_activity
+from awb.activity import conversation, dashboard, session_browser, session_inspector, sync_activity
 from awb.db import Database
 
 
@@ -123,3 +123,71 @@ def test_codex_source_duration_and_message_body_on_demand(tmp_path: Path) -> Non
     file.unlink()
     assert sync_activity(db, codex_root=root, claude_root=tmp_path / 'claude')['removed_files'] == 1
     assert conversation(db, 'codex', 'session-1')['count'] == 0
+
+
+def test_session_search_and_verified_codex_file_location(tmp_path: Path) -> None:
+    root = tmp_path / 'codex'
+    path = root / 'sessions' / '2026' / '09' / '28' / 'rollout.jsonl'
+    path.parent.mkdir(parents=True)
+    project = tmp_path / 'project'
+    project.mkdir()
+    output = project / 'report.md'
+    output.write_text('result')
+    needle = '独特检索词'
+    records = [
+        {'type': 'session_meta', 'payload': {'id': 'codex-test', 'cwd': str(project)}},
+        {'type': 'response_item', 'timestamp': '2026-09-28T10:00:00Z',
+         'payload': {'type': 'message', 'id': 'message-1', 'role': 'user',
+                     'content': [{'type': 'input_text', 'text': 'a' * 200 + needle}]}},
+        {'type': 'response_item', 'timestamp': '2026-09-28T10:01:00Z',
+         'payload': {'type': 'custom_tool_call', 'name': 'apply_patch', 'call_id': 'call-1',
+                     'input': '*** Begin Patch\n*** Add File: report.md\n+result\n*** End Patch'}},
+        {'type': 'response_item', 'timestamp': '2026-09-28T10:01:01Z',
+         'payload': {'type': 'custom_tool_call_output', 'call_id': 'call-1',
+                     'output': 'Exit code: 0\nSuccess. Updated the following files:\nA report.md\n'}},
+    ]
+    path.write_text(''.join(json.dumps(row) + '\n' for row in records))
+    db = Database(tmp_path / 'app.db')
+    db.initialize()
+    kwargs = {'sync': False, 'codex_root': root, 'claude_root': tmp_path / 'claude',
+              'hermes_path': tmp_path / 'missing.db'}
+    assert sync_activity(db, codex_root=root, claude_root=tmp_path / 'claude')['updated_files'] == 1
+    by_body = session_browser(db, '2026-09-28', '2026-09-28', 'UTC', query=needle, **kwargs)
+    assert [row['native_id'] for row in by_body['sessions']] == ['codex-test']
+    assert by_body['sessions'][0]['match']['type'] == '对话内容'
+    by_file = session_browser(db, '2026-09-28', '2026-09-28', 'UTC', query='report.md', **kwargs)
+    assert by_file['sessions'][0]['match']['type'] == '文件路径'
+    detail = session_inspector(db, 'codex', 'codex-test')
+    assert detail['cwd'] == str(project) and detail['record_bytes'] == path.stat().st_size
+    assert detail['unique_file_count'] == 1
+    assert detail['file_events'][0]['native_path'] == str(output)
+    assert detail['file_events'][0]['current_bytes'] == output.stat().st_size
+
+
+def test_claude_write_requires_successful_tool_result(tmp_path: Path) -> None:
+    root = tmp_path / 'claude'
+    path = root / 'projects' / 'sample' / 'session.jsonl'
+    path.parent.mkdir(parents=True)
+    project = tmp_path / 'project'
+    project.mkdir()
+    records = [
+        {'type': 'assistant', 'sessionId': 'claude-test', 'timestamp': '2026-09-28T10:00:00Z',
+         'cwd': str(project), 'message': {'content': [{'type': 'tool_use', 'id': 'ok',
+         'name': 'Write', 'input': {'file_path': 'done.txt', 'content': 'done'}}]}},
+        {'type': 'user', 'sessionId': 'claude-test', 'timestamp': '2026-09-28T10:00:01Z',
+         'cwd': str(project), 'message': {'content': [{'type': 'tool_result', 'tool_use_id': 'ok',
+         'content': 'done'}]}},
+        {'type': 'assistant', 'sessionId': 'claude-test', 'timestamp': '2026-09-28T10:00:02Z',
+         'cwd': str(project), 'message': {'content': [{'type': 'tool_use', 'id': 'failed',
+         'name': 'Edit', 'input': {'file_path': 'failed.txt'}}]}},
+        {'type': 'user', 'sessionId': 'claude-test', 'timestamp': '2026-09-28T10:00:03Z',
+         'cwd': str(project), 'message': {'content': [{'type': 'tool_result', 'tool_use_id': 'failed',
+         'is_error': True, 'content': 'error'}]}},
+    ]
+    path.write_text(''.join(json.dumps(row) + '\n' for row in records))
+    db = Database(tmp_path / 'app.db')
+    db.initialize()
+    sync_activity(db, codex_root=tmp_path / 'codex', claude_root=root)
+    detail = session_inspector(db, 'claude', 'claude-test')
+    assert detail['unique_file_count'] == 1
+    assert detail['file_events'][0]['native_path'] == str(project / 'done.txt')
