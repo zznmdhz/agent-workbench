@@ -11,7 +11,10 @@ def local_client(app):
     return TestClient(app, base_url="http://127.0.0.1:8765", client=("127.0.0.1", 50000))
 
 
-def test_local_desktop_opens_without_password(tmp_path: Path):
+def test_local_desktop_opens_without_password(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-source"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-source"))
+    monkeypatch.setenv("HERMES_STATE_DB", str(tmp_path / "hermes-source.db"))
     app = create_app(tmp_path / "workbench.db", desktop_mode=True)
     client = local_client(app)
     assert client.get("/auth/setup-status").json() == {
@@ -65,7 +68,16 @@ def test_existing_password_does_not_block_local_dashboard_or_reset_data(tmp_path
 
 def test_portable_default_path(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("sys.executable", str(tmp_path / "AgentWorkbench.exe"))
+    monkeypatch.setattr("sys.platform", "win32")
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "appdata"))
     assert default_db_path() == tmp_path / "appdata" / "AgentWorkbench" / "data" / "agent-workbench.db"
     (tmp_path / "portable.flag").touch()
     assert default_db_path() == tmp_path / "data" / "agent-workbench.db"
+
+
+def test_macos_default_path(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr("sys.executable", str(tmp_path / "python"))
+    monkeypatch.setattr("sys.platform", "darwin")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    assert default_db_path() == (tmp_path / "Library" / "Application Support" /
+                                 "AgentWorkbench" / "data" / "agent-workbench.db")

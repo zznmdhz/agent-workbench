@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
+import sys
 from collections import defaultdict
 from contextlib import closing
 from datetime import date, datetime, timedelta, timezone
@@ -14,7 +16,7 @@ from zoneinfo import ZoneInfo
 from .claude_usage import claude_usage_files, scan_claude_requests
 from .codec import day_bounds_utc_ms
 from .db import Database
-from .mvp_usage import sync_codex_usage
+from .mvp_usage import codex_home, sync_codex_usage
 
 _CLAUDE_LOCK = Lock()
 AGENTS = {"codex", "claude", "hermes"}
@@ -28,7 +30,12 @@ def claude_home() -> Path:
 
 
 def hermes_db_path() -> Path:
-    return Path(os.environ.get("HERMES_STATE_DB", Path.home() / "AppData/Local/hermes/state.db")).expanduser()
+    override = os.environ.get("HERMES_STATE_DB")
+    if override:
+        return Path(override).expanduser()
+    if sys.platform == "darwin":
+        return Path.home() / ".hermes" / "state.db"
+    return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / "hermes" / "state.db"
 
 
 def _empty() -> dict:
@@ -134,12 +141,63 @@ def _trend_dates(first: date, last: date, grain: str) -> list[str]:
     return values
 
 
+def _codex_titles(root: Path) -> dict[str, str]:
+    """Use Codex's own thread names without copying transcript content."""
+    titles: dict[str, str] = {}
+    index = root / "session_index.jsonl"
+    if index.is_file():
+        try:
+            with index.open("r", encoding="utf-8") as stream:
+                for line in stream:
+                    try:
+                        item = json.loads(line)
+                    except (ValueError, TypeError):
+                        continue
+                    if not isinstance(item, dict):
+                        continue
+                    native_id, name = item.get("id"), item.get("thread_name")
+                    if isinstance(native_id, str) and isinstance(name, str) and name.strip():
+                        titles[native_id] = name.strip()
+        except OSError:
+            pass
+    state = root / "state_5.sqlite"
+    if state.is_file():
+        try:
+            with closing(sqlite3.connect(state.resolve().as_uri() + "?mode=ro", uri=True, timeout=2)) as conn:
+                for native_id, name in conn.execute("SELECT id,name FROM threads WHERE name IS NOT NULL AND name != ''"):
+                    if isinstance(name, str) and name.strip():
+                        titles[native_id] = name.strip()
+        except (OSError, sqlite3.Error):
+            pass
+    return {native_id: " ".join(title.split()) for native_id, title in titles.items()}
+
+
+def _heatmap_keys(first: date, last: date, view: str) -> tuple[list[str], str]:
+    if view not in {"year", "month", "week", "day", "custom"}:
+        raise ValueError("Unsupported heatmap view")
+    if view == "day":
+        return [f"{first.isoformat()}T{hour:02d}" for hour in range(24)], "hour"
+    if view == "year":
+        first, last = date(first.year, 1, 1), date(first.year, 12, 31)
+    elif view == "month":
+        first = first.replace(day=1)
+        last = (first.replace(year=first.year + 1, month=1) if first.month == 12
+                else first.replace(month=first.month + 1)) - timedelta(days=1)
+    elif view == "week":
+        first -= timedelta(days=first.weekday())
+        last = first + timedelta(days=6)
+    elif (last - first).days > 366:
+        return _trend_dates(first, last, "month"), "month"
+    return _trend_dates(first, last, "day"), "day"
+
+
 def dashboard(db: Database, day: str, through: str, tz: str, *, agent: str | None = None,
-              model: str | None = None, sync: bool = True, codex_root: Path | None = None,
+              model: str | None = None, heatmap_view: str = "year", sync: bool = True, codex_root: Path | None = None,
               claude_root: Path | None = None, hermes_path: Path | None = None) -> dict:
     if agent and agent not in AGENTS:
         raise ValueError("Unsupported agent")
     first, last, start, end, zone = _range(day, through, tz)
+    heatmap_keys, heatmap_grain = _heatmap_keys(first, last, heatmap_view)
     sync_codex = sync_codex_usage(db, codex_root) if sync else {"status": "not_synced", "updated_files": 0}
     sync_claude = sync_claude_usage(db, claude_root) if sync else {"status": "not_synced", "updated_files": 0}
     hermes, hermes_state = _hermes_rows(hermes_path or hermes_db_path())
@@ -162,10 +220,12 @@ def dashboard(db: Database, day: str, through: str, tz: str, *, agent: str | Non
             COALESCE(SUM(cache_creation_known=0),0) FROM mvp_claude_requests WHERE {condition}""", params).fetchone()
         codex_files = [row[0] for row in conn.execute("SELECT status FROM mvp_usage_files")]
         claude_files = [row[0] for row in conn.execute("SELECT status FROM mvp_claude_files")]
+    codex_titles.update(_codex_titles(codex_root or codex_home()))
 
     span = (last - first).days + 1
     grain = "day" if span <= 31 else "week" if span <= 180 else "month"
     trend = defaultdict(_empty)
+    heatmap = defaultdict(_empty)
     summary = _empty()
     sources = {name: _empty() for name in AGENTS}
     models = defaultdict(_empty)
@@ -184,14 +244,18 @@ def dashboard(db: Database, day: str, through: str, tz: str, *, agent: str | Non
         sessions[key]["title"] = title
         sessions[key]["last_request"] = max(sessions[key]["last_request"], at.isoformat())
         if daily:
-            _add(trend[_bucket(at.astimezone(zone).date(), grain)], values)
+            local = at.astimezone(zone)
+            _add(trend[_bucket(local.date(), grain)], values)
+            heat_key = (f"{local.date().isoformat()}T{local.hour:02d}" if heatmap_grain == "hour"
+                        else _bucket(local.date(), heatmap_grain))
+            _add(heatmap[heat_key], values)
 
     for row in codex:
         original = max(0, row["input_tokens"])
         read = min(original, max(0, row["cached_input_tokens"]))
         at = datetime.fromisoformat(row["occurred_at"].replace("Z", "+00:00"))
         native_id = row["native_session_id"]
-        record("codex", native_id, codex_titles.get(native_id) or f"Codex · {native_id[:8]}",
+        record("codex", native_id, codex_titles.get(native_id) or f"未命名会话（{native_id[:8]}）",
                row["model"], at, _values(original - read, read, 0, row["output_tokens"]), daily=True)
     for row in claude:
         at = datetime.fromisoformat(row["occurred_at"].replace("Z", "+00:00"))
@@ -254,6 +318,8 @@ def dashboard(db: Database, day: str, through: str, tz: str, *, agent: str | Non
             "sessions": result_sessions[:100], "session_count": len(result_sessions),
             "trend_granularity": grain,
             "trend": [{"period": period, **trend[period]} for period in _trend_dates(first, last, grain)],
+            "heatmap_view": heatmap_view, "heatmap_granularity": heatmap_grain,
+            "heatmap": [{"period": period, **heatmap[period]} for period in heatmap_keys],
             "unattributed_tokens": sources["hermes"]["total_tokens"] if agent in (None, "hermes") else 0,
             "note": "Codex/Claude 按请求时间归属；Hermes 仅纳入完整落在所选时段的会话模型汇总，无法按天拆分。"}
 

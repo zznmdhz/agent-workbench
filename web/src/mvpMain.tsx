@@ -8,7 +8,8 @@ type Source=Totals&{status:string,precision:'request'|'session_model_aggregate',
 type Trend=Totals&{period:string}
 type Model=Totals&{agent:Agent,model:string}
 type Session=Totals&{agent:Agent,native_id:string,title:string,last_request:string}
-type Usage={status:string,summary:Totals,sources:Record<Agent,Source>,models:Model[],sessions:Session[],session_count:number,trend:Trend[],trend_granularity:'day'|'week'|'month',unattributed_tokens:number,note:string}
+type HeatView='year'|'month'|'week'|'day'|'custom'
+type Usage={status:string,summary:Totals,sources:Record<Agent,Source>,models:Model[],sessions:Session[],session_count:number,trend:Trend[],trend_granularity:'day'|'week'|'month',heatmap:Trend[],heatmap_view:HeatView,heatmap_granularity:'day'|'hour'|'month',unattributed_tokens:number,note:string}
 type Request=Totals&{request_id:string,occurred_at:string,first_seen?:string,model:string,precision:'request'|'session_model_aggregate'}
 type UpdateStatus={available:boolean,current_version:string,state:'idle'|'available'|'current'|'downloading'|'installing'|'error',latest_version:string|null,progress:number,error:string|null}
 const names:Record<Agent,string>={codex:'Codex',claude:'Claude',hermes:'Hermes'}
@@ -19,6 +20,23 @@ const yearStart=()=>`${today().slice(0,4)}-01-01`
 const when=(value:string|null)=>value?new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Hong_Kong',hour12:false}):'无记录'
 const dayOf=(value:string|null)=>value?new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value)):'无记录'
 const sourceStatus=(row:Source)=>row.status==='source_missing'?'未发现本机来源':row.status==='read_error'?'读取失败':row.deferred>0?`${row.deferred} 项暂未计入`:'已读取'
+const lastDayOfMonth=(year:number,month:number)=>new Date(Date.UTC(year,month,0)).toISOString().slice(0,10)
+function periodBounds(view:Exclude<HeatView,'custom'>,anchor:string):[string,string]{
+  if(view==='day')return [anchor,anchor]
+  if(view==='year')return [`${anchor.slice(0,4)}-01-01`,`${anchor.slice(0,4)}-12-31`]
+  if(view==='month')return [`${anchor.slice(0,7)}-01`,lastDayOfMonth(Number(anchor.slice(0,4)),Number(anchor.slice(5,7)))]
+  const weekday=(new Date(`${anchor}T12:00:00Z`).getUTCDay()+6)%7
+  const monday=shift(anchor,-weekday)
+  return [monday,shift(monday,6)]
+}
+function movePeriod(view:Exclude<HeatView,'custom'>,anchor:string,delta:number){
+  if(view==='day')return shift(anchor,delta)
+  if(view==='week')return shift(anchor,delta*7)
+  const d=new Date(`${anchor.slice(0,7)}-01T12:00:00Z`)
+  d.setUTCMonth(d.getUTCMonth()+(view==='year'?delta*12:delta))
+  return d.toISOString().slice(0,10)
+}
+const periodLabel=(view:HeatView,start:string,end:string)=>view==='year'?`${start.slice(0,4)} 年`:view==='month'?`${start.slice(0,7)} 月`:view==='week'?`${start}—${end}`:view==='day'?`${start} · 24 小时`:`${start}—${end}`
 
 async function get<T>(path:string):Promise<T>{const r=await fetch(path,{credentials:'same-origin'});if(!r.ok)throw new Error(`${r.status}: ${(await r.text()).slice(0,120)}`);return r.json()}
 async function post<T>(path:string,body?:object,csrf?:string):Promise<T>{const r=await fetch(path,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json',...(csrf?{'x-awb-csrf':csrf}:{})},body:body?JSON.stringify(body):undefined});if(!r.ok)throw new Error(`${r.status}: ${(await r.text()).slice(0,120)}`);return r.json()}
@@ -31,6 +49,7 @@ function App(){
   const [start,setStart]=useState(yearStart)
   const [end,setEnd]=useState(today)
   const [preset,setPreset]=useState('year')
+  const [heatView,setHeatView]=useState<HeatView>('year')
   const [agent,setAgent]=useState<Agent|''>('')
   const [model,setModel]=useState('')
   const [choices,setChoices]=useState<string[]>([])
@@ -71,13 +90,13 @@ function App(){
   useEffect(()=>{
     if(!csrf||invalidRange)return
     let cancelled=false
-    const params=new URLSearchParams({day:start,through:end,tz:'Asia/Hong_Kong'})
+    const params=new URLSearchParams({day:start,through:end,tz:'Asia/Hong_Kong',heatmap_view:heatView})
     if(agent)params.set('agent',agent)
     if(model)params.set('model',model)
     setLoading(true)
     get<Usage>(`/v1/mvp/usage?${params}`).then(x=>{if(!cancelled){setData(x);setError('');if(!model)setChoices(x.models.map(m=>m.model).filter((v,i,a)=>a.indexOf(v)===i).sort())}}).catch(e=>{if(!cancelled)setError(`用量读取失败：${String(e)}`)}).finally(()=>{if(!cancelled)setLoading(false)})
     return()=>{cancelled=true}
-  },[csrf,start,end,agent,model,tick,invalidRange])
+  },[csrf,start,end,agent,model,heatView,tick,invalidRange])
   useEffect(()=>{
     if(!selected||invalidRange){setRequests(null);return}
     let cancelled=false
@@ -88,20 +107,29 @@ function App(){
     return()=>{cancelled=true}
   },[selected,start,end,model,tick,invalidRange])
 
-  function chooseRange(days:number){setPreset(String(days));setStart(shift(today(),1-days));setEnd(today());setSelected(null)}
-  function chooseYear(){setPreset('year');setStart(yearStart());setEnd(today());setSelected(null)}
+  function chooseRange(days:number){setPreset(String(days));setHeatView(days===1?'day':'custom');setStart(shift(today(),1-days));setEnd(today());setSelected(null)}
+  function chooseYear(){setPreset('year');setHeatView('year');setStart(yearStart());setEnd(today());setSelected(null)}
   function allHistory(){
     const earliest=Object.values(data?.sources||{}).map(x=>x.earliest).filter((x):x is string=>!!x).sort()[0]
-    setStart(earliest?dayOf(earliest):'2026-01-01');setEnd(today());setPreset('all');setSelected(null)
+    setStart(earliest?dayOf(earliest):'2026-01-01');setEnd(today());setPreset('all');setHeatView('custom');setSelected(null)
   }
+  function selectHeatView(view:Exclude<HeatView,'custom'>,anchor=end){
+    const [from,to]=periodBounds(view,anchor)
+    setStart(from);setEnd(to);setPreset('heat');setHeatView(view);setSelected(null)
+  }
+  function switchAgent(value:Agent|''){setAgent(value);setModel('');setSelected(null)}
+  function selectModel(value:Model){setAgent(value.agent);setModel(value.model);setSelected(null)}
   async function shutdown(){if(!window.confirm('关闭工作台？'))return;try{await post('/v1/local/shutdown',undefined,csrf);setStopped(true)}catch(e){setError(String(e))}}
   async function retryUpdate(){try{setUpdate(await post<UpdateStatus>('/v1/local/update',undefined,csrf))}catch(e){setUpdate(x=>x?{...x,error:String(e)}:x)}}
 
-  if(stopped)return <main className="mvpLogin"><div className="mvpLoginCard"><h1>工作台已关闭</h1><p>从开始菜单重新打开即可继续使用。</p></div></main>
+  if(stopped)return <main className="mvpLogin"><div className="mvpLoginCard"><h1>工作台已关闭</h1><p>重新打开 Agent Workbench 即可继续使用。</p></div></main>
   if(!csrf)return <main className="mvpLogin"><div className="mvpLoginCard"><div className="mvpMark">✳</div><h1>Agent Workbench</h1><p>{error||'正在读取本机数据…'}</p>{error&&<button onClick={()=>window.location.reload()}>重试连接</button>}</div></main>
 
   const summary=data?.summary
-  const max=Math.max(1,...(data?.trend||[]).map(x=>x.total_tokens),data?.unattributed_tokens||0)
+  const maxHeat=Math.max(1,...(data?.heatmap||[]).map(x=>x.total_tokens))
+  const heatLayout=heatView==='custom'?(data?.heatmap_granularity==='month'?'months':(data?.heatmap.length||0)>31?'year':'month'):heatView
+  const heatOffset=heatLayout==='year'||heatLayout==='month'?(new Date(`${data?.heatmap[0]?.period?.slice(0,10)||start}T12:00:00Z`).getUTCDay()+6)%7:0
+  const currentHour=Number(new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Hong_Kong',hour:'2-digit',hourCycle:'h23'}).format(new Date()))
   const cards=summary?[
     ['请求／调用',fmt(summary.requests),'Codex/Claude 请求与 Hermes 汇总调用'],
     ['处理 Token',fmt(summary.total_tokens),'已记录量：新输入 + 缓存读 + 缓存写 + 输出'],
@@ -109,19 +137,35 @@ function App(){
     ['缓存读取',fmt(summary.cached_input_tokens),summary.cache_hit_rate===null?'缓存率未知':`占全部输入 ${(summary.cache_hit_rate!*100).toFixed(1)}%`],
     ['缓存写入',fmt(summary.cache_creation_tokens),'Claude/Hermes 记录的写入'],
     ['输出',fmt(summary.output_tokens),'模型生成的 Token'],
-    ['活跃会话',fmt(data!.session_count),'所选范围内有用量的会话'],
+    ['有用量的会话',fmt(data!.session_count),'所选时段有 Token 记录，不代表正在运行'],
   ]:[]
-  return <div className="mvpShell"><header className="mvpHeader"><div className="mvpBrand"><span className="mvpMark">✳</span><span><b>Agent Workbench</b><small>多 Agent 用量 · v{update?.current_version||'0.4.1'}</small></span></div><div className="mvpHeaderActions"><button onClick={()=>setTick(x=>x+1)} disabled={loading}>{loading?'同步中…':'刷新'}</button><button onClick={shutdown}>关闭工作台</button></div></header><main className="mvpMain"><div className="mvpTitle"><div><p>USAGE / AGENTS</p><h1>用量仪表盘</h1><span>按原始记录核对 Token；不完整的历史范围会明确标示。</span></div><span className="mvpScope">Codex · Claude · Hermes</span></div>
+  return <div className="mvpShell"><header className="mvpHeader"><div className="mvpBrand"><span className="mvpMark">✳</span><span><b>Agent Workbench</b><small>多 Agent 用量 · v{update?.current_version||'0.4.1'}</small></span></div><div className="mvpHeaderActions"><button onClick={()=>setTick(x=>x+1)} disabled={loading}>{loading?'同步中…':'刷新'}</button><button onClick={shutdown}>关闭工作台</button></div></header><main className="mvpMain"><div className="mvpTitle"><div><p>USAGE / AGENTS</p><h1>用量仪表盘</h1><span>按原始记录核对 Token；不完整的历史范围会明确标示。</span></div><div className="mvpAgentSwitch" role="group" aria-label="切换 Agent"><button aria-pressed={agent===''} onClick={()=>switchAgent('')}>全部</button>{(Object.keys(names) as Agent[]).map(name=><button key={name} aria-pressed={agent===name} onClick={()=>switchAgent(name)}><span className={`mvpAgentIcon ${name}`}>{name==='codex'?'C':name==='claude'?'✳':'H'}</span>{names[name]}</button>)}</div></div>
     {update?.available&&update.state==='downloading'&&<div className="mvpUpdate" role="status">检测到 v{update.latest_version}，正在自动下载并校验安装包：{update.progress}%</div>}
     {update?.available&&update.state==='installing'&&<div className="mvpUpdate" role="status">安装包已校验，正在自动关闭旧版、安装并重新打开工作台。请稍候…</div>}
     {update?.available&&update.state==='error'&&<div className="mvpError" role="alert">自动更新暂时失败：{update.error}。当前版本仍可使用。{update.latest_version&&<button onClick={retryUpdate}>重试更新</button>}</div>}
-    <section className="mvpFilters" aria-label="用量筛选"><div className="mvpRange" role="group" aria-label="快捷日期范围">{[1,7,15].map(n=><button key={n} aria-pressed={preset===String(n)} onClick={()=>chooseRange(n)}>{n===1?'今天':`近 ${n} 天`}</button>)}<button aria-pressed={preset==='year'} onClick={chooseYear}>今年至今</button><button aria-pressed={preset==='all'} onClick={allHistory}>全部历史</button></div><label>开始日期 <input type="date" value={start} onChange={e=>{setStart(e.target.value);setPreset('custom');setSelected(null)}}/></label><label>结束日期 <input type="date" value={end} onChange={e=>{setEnd(e.target.value);setPreset('custom');setSelected(null)}}/></label><label>Agent <select value={agent} onChange={e=>{setAgent(e.target.value as Agent|'');setModel('');setSelected(null)}}><option value="">全部 Agent</option>{Object.entries(names).map(([key,label])=><option key={key} value={key}>{label}</option>)}</select></label><label>模型 <select value={model} onChange={e=>{setModel(e.target.value);setSelected(null)}}><option value="">全部模型</option>{choices.map(x=><option key={x} value={x}>{x}</option>)}</select></label></section>
+    <section className="mvpFilters" aria-label="用量筛选"><div className="mvpRange" role="group" aria-label="快捷日期范围">{[1,7,15].map(n=><button key={n} aria-pressed={preset===String(n)} onClick={()=>chooseRange(n)}>{n===1?'今天':`近 ${n} 天`}</button>)}<button aria-pressed={preset==='year'} onClick={chooseYear}>今年至今</button><button aria-pressed={preset==='all'} onClick={allHistory}>全部历史</button></div><label>开始日期 <input type="date" value={start} onChange={e=>{setStart(e.target.value);setPreset('custom');setHeatView('custom');setSelected(null)}}/></label><label>结束日期 <input type="date" value={end} onChange={e=>{setEnd(e.target.value);setPreset('custom');setHeatView('custom');setSelected(null)}}/></label><label>模型 <select value={model} onChange={e=>{setModel(e.target.value);setSelected(null)}}><option value="">全部模型</option>{choices.map(x=><option key={x} value={x}>{x}</option>)}</select></label></section>
     {invalidRange&&<div className="mvpError" role="alert">开始日期不能晚于结束日期。</div>}{error&&<div className="mvpError" role="alert">{error}</div>}
     {data&&<p className="mvpProvenance">查询：{start} 至 {end}，香港时间。{data.note} 原生记录未提供的缓存字段无法补算，显示的总量可能偏低；费用尚未计价。{loading?' 正在同步本机日志…':''}</p>}
     <section className="mvpCards" aria-label="核心指标">{cards.map(([label,value,note])=><article className="mvpCard" key={label}><small>{label}</small><strong>{value}</strong><span>{note}</span></article>)}</section>
     {data&&<section className="mvpPanel"><div className="mvpPanelHead"><h2>数据来源与覆盖</h2><span>点击来源可只看该 Agent</span></div><div className="mvpSourceGrid">{(Object.keys(names) as Agent[]).map(name=>{const source=data.sources[name];return <button className="mvpSource" key={name} onClick={()=>{setAgent(name);setModel('');setSelected(null)}} aria-pressed={agent===name}><b>{names[name]}</b><strong>{fmt(source.total_tokens)} Token</strong><span>{fmt(source.requests)} {name==='hermes'?'调用（会话汇总）':'请求'} · {sourceStatus(source)}</span><small>本机记录：{dayOf(source.earliest)} 至 {dayOf(source.latest)}</small>{name==='claude'&&!!((source.missing_cache_read||0)+(source.missing_cache_write||0))&&<small>原始记录缺缓存读字段 {fmt(source.missing_cache_read||0)} 条、缺缓存写字段 {fmt(source.missing_cache_write||0)} 条；对应总量可能偏低</small>}{name==='hermes'&&<small>只能按完整会话汇总计入；跨越筛选边界 {fmt(source.partial_rows||0)} 项未计入</small>}</button>})}</div></section>}
-    <section className="mvpPanel"><div className="mvpPanelHead"><h2>{data?.trend_granularity==='month'?'每月用量':data?.trend_granularity==='week'?'每周用量':'每日用量'}</h2><span>Codex / Claude 按请求时间；Hermes 不能拆到每日</span></div><div className="mvpTrend">{data?.trend.map(row=><div className="mvpTrendRow" key={row.period}><time>{row.period}</time><div className="mvpBar"><span style={{width:`${row.total_tokens/max*100}%`}}/></div><b>{fmt(row.total_tokens)}</b><small>{fmt(row.requests)} 请求</small></div>)}{!!data?.unattributed_tokens&&<div className="mvpTrendRow mvpUnattributed"><time>未分配日期</time><div className="mvpBar"><span style={{width:`${data.unattributed_tokens/max*100}%`}}/></div><b>{fmt(data.unattributed_tokens)}</b><small>Hermes 汇总</small></div>}</div></section>
-    <div className="mvpTwo"><section className="mvpPanel"><div className="mvpPanelHead"><h2>模型用量</h2><span>点击行筛选模型</span></div><div className="mvpTableWrap"><table><thead><tr><th>Agent</th><th>模型</th><th>请求／调用</th><th>新输入</th><th>缓存读</th><th>缓存写</th><th>输出</th><th>处理总量</th></tr></thead><tbody>{data?.models.map(row=><tr key={`${row.agent}:${row.model}`} onClick={()=>{setAgent(row.agent);setModel(row.model);setSelected(null)}} className="mvpClickable"><td>{names[row.agent]}</td><td>{row.model}</td><td>{fmt(row.requests)}</td><td>{fmt(row.fresh_input_tokens)}</td><td>{fmt(row.cached_input_tokens)}</td><td>{fmt(row.cache_creation_tokens)}</td><td>{fmt(row.output_tokens)}</td><td>{fmt(row.total_tokens)}</td></tr>)}</tbody></table></div>{!data?.models.length&&<p className="mvpEmpty">所选范围没有可核对的用量记录</p>}</section><section className="mvpPanel"><div className="mvpPanelHead"><h2>活跃会话</h2><span>{data?.session_count||0} 条</span></div><div className="mvpSessions">{data?.sessions.slice(0,30).map(row=><button key={`${row.agent}:${row.native_id}`} onClick={()=>setSelected(row)} aria-pressed={selected?.native_id===row.native_id&&selected.agent===row.agent}><b>{names[row.agent]} · {row.title}</b><small>{when(row.last_request)} · {fmt(row.requests)} {row.agent==='hermes'?'调用':'请求'} · {fmt(row.total_tokens)} Token</small></button>)}</div>{!data?.sessions.length&&<p className="mvpEmpty">暂无可关联的会话</p>}</section></div>
+    <section className="mvpPanel mvpHeatPanel">
+      <div className="mvpPanelHead"><div><h2>Token 活动热力图</h2><p>Codex / Claude 按本机请求时间统计；聚焦格子可查看准确用量。</p></div><div className="mvpHeatViews" role="group" aria-label="热力图时间粒度">{(['year','month','week','day'] as const).map(view=><button key={view} aria-pressed={heatView===view} onClick={()=>selectHeatView(view)}>{({year:'年',month:'月',week:'周',day:'日'} as const)[view]}</button>)}</div></div>
+      <div className="mvpHeatPeriod"><button onClick={()=>heatView!=='custom'&&selectHeatView(heatView,movePeriod(heatView,start,-1))} disabled={heatView==='custom'} aria-label="上一时段">‹</button><strong>{periodLabel(heatView,start,end)}</strong><button onClick={()=>heatView!=='custom'&&selectHeatView(heatView,movePeriod(heatView,start,1))} disabled={heatView==='custom'} aria-label="下一时段">›</button><button onClick={()=>selectHeatView(heatView==='custom'?'year':heatView,today())}>回到当前</button></div>
+      <div className="mvpHeatScroll"><div className={`mvpHeatGrid mvpHeat${heatLayout}`} role="group" aria-label="Token 用量格子">
+        {Array.from({length:heatOffset},(_,index)=><span className="mvpHeatSpacer" key={`spacer-${index}`} aria-hidden="true" />)}
+        {data?.heatmap.map(row=>{
+          const day=row.period.slice(0,10)
+          const isFuture=day>today()||(data.heatmap_granularity==='hour'&&day===today()&&Number(row.period.slice(-2))>currentHour)
+          const isOutside=data.heatmap_granularity!=='month'&&(day<start||day>end)
+          const level=row.total_tokens?Math.max(1,Math.ceil(Math.log1p(row.total_tokens)/Math.log1p(maxHeat)*4)):0
+          const label=`${row.period}${data.heatmap_granularity==='hour'?':00':''}，${isFuture?'尚未发生':isOutside?'不在所选范围':`${fmt(row.total_tokens)} Token，${fmt(row.requests)} 请求`}`
+          return <button type="button" key={row.period} className={`mvpHeatCell level${level}${isFuture?' future':''}${isOutside?' outside':''}`} title={label} aria-label={label} disabled={isFuture||isOutside} onClick={()=>data.heatmap_granularity==='month'?selectHeatView('month',day):data.heatmap_granularity==='day'?selectHeatView('day',day):undefined}><span>{data.heatmap_granularity==='month'?day.slice(0,7):heatLayout==='day'?row.period.slice(-2):heatLayout==='week'?new Date(`${day}T12:00:00Z`).toLocaleDateString('zh-CN',{weekday:'short',timeZone:'UTC'}):''}</span></button>
+        })}
+      </div></div>
+      <div className="mvpHeatMeta"><span>{data?.heatmap_granularity==='hour'?'每格一小时':data?.heatmap_granularity==='month'?'每格一月':'每格一天'} · 颜色越深，用量越高；斜纹表示尚未发生</span><div className="mvpHeatLegend">少 {[0,1,2,3,4].map(level=><i className={`level${level}`} key={level}/>)} 多</div></div>
+      {!!data?.unattributed_tokens&&<p className="mvpHeatUndated">Hermes 有 {fmt(data.unattributed_tokens)} Token 的会话／模型汇总已计入上方指标；原始记录没有逐日或逐小时用量，因此不能分配到格子里。</p>}
+    </section>
+    <div className="mvpTwo"><section className="mvpPanel"><div className="mvpPanelHead"><h2>模型用量</h2><span>点击行筛选模型</span></div><div className="mvpTableWrap"><table><thead><tr><th>Agent</th><th>模型</th><th>请求／调用</th><th>新输入</th><th>缓存读</th><th>缓存写</th><th>输出</th><th>处理总量</th></tr></thead><tbody>{data?.models.map(row=><tr key={`${row.agent}:${row.model}`}><td>{names[row.agent]}</td><td><button className="mvpModelButton" onClick={()=>selectModel(row)} aria-label={`筛选 ${names[row.agent]} 的 ${row.model}`}>{row.model}</button></td><td>{fmt(row.requests)}</td><td>{fmt(row.fresh_input_tokens)}</td><td>{fmt(row.cached_input_tokens)}</td><td>{fmt(row.cache_creation_tokens)}</td><td>{fmt(row.output_tokens)}</td><td>{fmt(row.total_tokens)}</td></tr>)}</tbody></table></div>{!data?.models.length&&<p className="mvpEmpty">所选范围没有可核对的用量记录</p>}</section><section className="mvpPanel"><div className="mvpPanelHead"><div><h2>所选时段会话</h2><p>筛选日期内有用量记录的会话，并非正在运行的对话。</p></div><span>共 {fmt(data?.session_count||0)} 条{(data?.session_count||0)>(data?.sessions.length||0)?` · 显示最近 ${data?.sessions.length}`:''}</span></div><div className="mvpSessions">{data?.sessions.map(row=><button key={`${row.agent}:${row.native_id}`} onClick={()=>setSelected(row)} aria-pressed={selected?.native_id===row.native_id&&selected.agent===row.agent}><b title={row.title}>{names[row.agent]} · {row.title}</b><small>{when(row.last_request)} · {fmt(row.requests)} {row.agent==='hermes'?'调用':'请求'} · {fmt(row.total_tokens)} Token</small></button>)}</div>{!data?.sessions.length&&<p className="mvpEmpty">所选时段没有可关联的会话</p>}</section></div>
     {selected&&<section className="mvpPanel"><div className="mvpPanelHead"><div><h2>{names[selected.agent]} · {selected.title}</h2><p>{selected.agent==='hermes'?'以下是会话／模型汇总，不是逐请求记录，也无法拆分到某一天。':`共 ${requestCount} 条请求；显示最近 100 条。`}</p></div><button onClick={()=>setSelected(null)}>关闭</button></div><div className="mvpTableWrap"><table><thead><tr><th>{selected.agent==='hermes'?'末次使用':'时间'}</th><th>模型</th><th>新输入</th><th>缓存读</th><th>缓存写</th><th>输出</th><th>总量</th></tr></thead><tbody>{requests?.map(row=><tr key={row.request_id}><td>{when(row.occurred_at)}</td><td>{row.model}</td><td>{fmt(row.fresh_input_tokens)}</td><td>{fmt(row.cached_input_tokens)}</td><td>{fmt(row.cache_creation_tokens)}</td><td>{fmt(row.output_tokens)}</td><td>{fmt(row.total_tokens)}</td></tr>)}</tbody></table></div>{requests===null&&<p className="mvpEmpty">正在加载用量记录…</p>}</section>}
     <p className="mvpFoot">本阶段提供本机用量统计；历史对话、文件与跨设备管理仍待后续开发。源日志不存在的时段不会被补造。</p></main></div>
 }

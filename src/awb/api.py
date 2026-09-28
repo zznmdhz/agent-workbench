@@ -498,9 +498,11 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
 
     @app.get("/v1/mvp/usage")
     def mvp_usage(day: str, through: str | None = None, tz: str = "Asia/Hong_Kong",
-                  agent: str | None = None, model: str | None = None, _: str = Depends(require_owner)):
+                  agent: str | None = None, model: str | None = None,
+                  heatmap_view: str = "year", _: str = Depends(require_owner)):
         try:
-            return mvp_dashboard(db, day, through or day, tz, agent=agent, model=model)
+            return mvp_dashboard(db, day, through or day, tz, agent=agent, model=model,
+                                 heatmap_view=heatmap_view)
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, "Invalid usage date range or timezone") from exc
 

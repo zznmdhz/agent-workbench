@@ -1,13 +1,20 @@
 import json
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from awb.api import create_app
 from awb.db import Database
-from awb.multi_usage import dashboard, session_requests, sync_claude_usage
+from awb.multi_usage import (
+    _codex_titles,
+    _heatmap_keys,
+    dashboard,
+    hermes_db_path,
+    session_requests,
+    sync_claude_usage,
+)
 
 
 def _claude(path: Path, message_id: str, *, output: int, final: bool, at: str = "2026-01-05T12:00:00Z"):
@@ -61,6 +68,7 @@ def test_claude_dedup_and_hermes_boundary_in_long_range(tmp_path: Path):
     assert january["sources"]["claude"]["requests"] == 1
     assert january["sources"]["hermes"]["partial_rows"] == 1
     assert sum(row["total_tokens"] for row in january["trend"]) == 14
+    assert sum(row["total_tokens"] for row in january["heatmap"]) == 14
     assert january["unattributed_tokens"] == 42
     assert january["trend_granularity"] == "day"
 
@@ -130,6 +138,8 @@ def test_web_usage_query_accepts_january_to_september_and_agent_filter(tmp_path:
     assert response.status_code == 200
     assert response.json()["trend_granularity"] == "month"
     assert response.json()["summary"]["total_tokens"] == 116
+    assert client.get("/v1/mvp/usage", params={"day": "2026-01-01", "through": "2026-01-01",
+                                                  "heatmap_view": "invalid"}).status_code == 422
     hermes_only = client.get("/v1/mvp/usage", params={"day": "2026-01-01", "through": "2026-09-26",
                                                        "tz": "UTC", "agent": "hermes"}).json()
     assert hermes_only["summary"]["total_tokens"] == 102
@@ -158,3 +168,61 @@ def test_missing_claude_cache_field_is_reported_not_invented(tmp_path: Path):
     assert result["sources"]["claude"]["missing_cache_read"] == 0
     assert result["sources"]["claude"]["missing_cache_write"] == 1
     assert result["summary"]["total_tokens"] == 15
+
+
+def test_heatmap_periods_cover_leap_year_and_custom_months():
+    assert len(_heatmap_keys(date(2028, 6, 1), date(2028, 6, 1), "year")[0]) == 366
+    assert len(_heatmap_keys(date(2027, 2, 1), date(2027, 2, 1), "month")[0]) == 28
+    assert len(_heatmap_keys(date(2028, 2, 1), date(2028, 2, 1), "month")[0]) == 29
+    assert len(_heatmap_keys(date(2026, 4, 1), date(2026, 4, 1), "month")[0]) == 30
+    assert len(_heatmap_keys(date(2026, 1, 1), date(2026, 1, 1), "month")[0]) == 31
+    week, grain = _heatmap_keys(date(2026, 12, 31), date(2026, 12, 31), "week")
+    assert (len(week), week[0], week[-1], grain) == (7, "2026-12-28", "2027-01-03", "day")
+    hours, grain = _heatmap_keys(date(2026, 1, 1), date(2026, 1, 1), "day")
+    assert (len(hours), hours[0], hours[-1], grain) == (24, "2026-01-01T00", "2026-01-01T23", "hour")
+    months, grain = _heatmap_keys(date(2026, 1, 15), date(2027, 2, 2), "custom")
+    assert (len(months), months[0], months[-1], grain) == (14, "2026-01-01", "2027-02-01", "month")
+
+
+def test_heatmap_hong_kong_midnight_and_agent_model_filter(tmp_path: Path):
+    db = Database(tmp_path / "db.sqlite")
+    db.initialize()
+    with db.tx() as conn:
+        conn.executemany("""INSERT INTO mvp_usage_requests
+            (request_id,native_session_id,occurred_at,model,input_tokens,cached_input_tokens,
+             output_tokens,source_file,source_offset) VALUES(?,?,?,?,?,?,?,?,?)""", [
+            ("before", "a", "2026-12-31T15:59:00Z", "model-a", 4, 0, 1, "sample", 1),
+            ("after", "a", "2026-12-31T16:00:00Z", "model-a", 10, 3, 2, "sample", 2),
+            ("other", "b", "2026-12-31T16:01:00Z", "model-b", 7, 0, 3, "sample", 3),
+        ])
+    result = dashboard(db, "2027-01-01", "2027-01-01", "Asia/Hong_Kong", agent="codex",
+                       model="model-a", heatmap_view="day", sync=False,
+                       codex_root=tmp_path / "missing", hermes_path=tmp_path / "missing.db")
+    assert result["summary"]["total_tokens"] == 12
+    assert result["session_count"] == 1
+    assert len(result["heatmap"]) == 24
+    assert result["heatmap"][0]["total_tokens"] == 12
+    assert sum(row["total_tokens"] for row in result["heatmap"]) == 12
+    assert result["sessions"][0]["title"] == "未命名会话（a）"
+
+
+def test_codex_titles_use_state_name_and_keep_complete_title(tmp_path: Path):
+    (tmp_path / "session_index.jsonl").write_text(
+        json.dumps({"id": "a", "thread_name": "Index title"}) + "\n[]\ninvalid\n", encoding="utf-8")
+    title = "中文标题" * 40
+    with sqlite3.connect(tmp_path / "state_5.sqlite") as conn:
+        conn.execute("CREATE TABLE threads(id TEXT,name TEXT)")
+        conn.execute("INSERT INTO threads VALUES(?,?)", ("a", title))
+    assert _codex_titles(tmp_path)["a"] == title
+
+
+def test_hermes_default_path_for_mac_and_windows(monkeypatch, tmp_path: Path):
+    monkeypatch.delenv("HERMES_STATE_DB", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr("awb.multi_usage.sys.platform", "darwin")
+    assert hermes_db_path() == tmp_path / ".hermes" / "state.db"
+    monkeypatch.setattr("awb.multi_usage.sys.platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "appdata"))
+    assert hermes_db_path() == tmp_path / "appdata" / "hermes" / "state.db"
+    monkeypatch.setenv("HERMES_STATE_DB", str(tmp_path / "override.db"))
+    assert hermes_db_path() == tmp_path / "override.db"

@@ -183,7 +183,8 @@ class UpdateManager:
                               "-Installer", str(destination), "-TargetExe", str(self.executable),
                               "-ParentPid", str(os.getpid()), "-LogPath", str(log),
                               "-FailurePath", str(failure)],
-                             creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
+                            creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                                           | getattr(subprocess, "DETACHED_PROCESS", 0)),
                              close_fds=True)
             with self._lock:
                 self._state = "installing"

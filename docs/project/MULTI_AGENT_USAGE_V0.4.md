@@ -6,13 +6,15 @@
 | --- | --- | --- | --- |
 | Codex | `~/.codex/sessions` 与 `archived_sessions` JSONL | 请求级，按 `token_count` 发生时间 | 原始 input 已含 cache read；新输入 = input − cache read，缓存写入未提供 |
 | Claude Code | `~/.claude/projects/**/*.jsonl` 的 assistant `message.usage` | 请求级，按原始 timestamp；同一 message.id 选已结束／输出更完整的快照 | input、cache read、cache creation、output 分别计入 |
-| Hermes | `%LOCALAPPDATA%/hermes/state.db` 的 `session_model_usage` | 会话／模型累计汇总，不是逐请求 | input、cache read、cache write、output 分别计入；api_call_count 是汇总调用数 |
+| Hermes | Windows `%LOCALAPPDATA%/hermes/state.db`；Mac `~/.hermes/state.db`（均可用 `HERMES_STATE_DB` 覆盖） | 会话／模型累计汇总，不是逐请求 | input、cache read、cache write、output 分别计入；api_call_count 是汇总调用数 |
 
 所有来源只读。总处理量 = 新输入 + 缓存读取 + 缓存写入 + 输出；来源缺项按该来源已知语义处理，不估算不存在的值。Claude 有些原始请求没有缓存字段，来源卡显示缺失条数；这些总量只是已记录量，可能低于实际值。此总量是本机日志中的来源之和，不是订阅账单或跨设备全局配额。
 
 ## 日期
 
 起止日期以香港时间解释，查询上限十年。1–31 天按日、32–180 天按周、更长按月显示请求级趋势。Hermes 每条汇总只有 first_seen 和 last_seen；只有两者完整落在所选时段内才纳入卡片和模型表。跨越区间边界的记录计入“暂未计入”数量，不把整条归到某一天。已经纳入的 Hermes 总量在趋势中列为“未分配日期”，与请求级趋势相加才等于总卡片。
+
+当前工作分支的热力图按请求级记录展示：年、月、周视图每格一天，日视图每格一小时；超过一年的自定义区间每格一月。图中只包含 Codex／Claude 的可归属请求，Hermes 已计入总卡片的用量在图下注明未分配日期。未来格子用斜纹标识，不能解读为零用量；早于本机来源覆盖日期的空格也不能证明当时没有使用。Codex 会话标题优先读取原生 `state_5.sqlite` 的 `threads.name`，其次读取 `session_index.jsonl` 的 `thread_name`，只读且不展示日志正文。
 
 来源卡显示原生记录的实际最早／最晚时间。早于此时间的选定月份为 0，不能解释为工具只保留 15 天。本机 2026-09-26 检查时，Codex 最早 2026-07-03、Claude 最早 2026-06-28、Hermes 最早 2026-08-09；这些日期取决于用户当前电脑，其他安装实例会不同。
 

@@ -1,4 +1,4 @@
-"""Windowless Windows launcher for the local workbench."""
+"""Local desktop launcher for Windows and macOS."""
 
 from __future__ import annotations
 
@@ -21,6 +21,8 @@ def default_db_path() -> Path:
     executable_dir = Path(sys.executable).resolve().parent
     if (executable_dir / "portable.flag").exists():
         return executable_dir / "data" / "agent-workbench.db"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "AgentWorkbench" / "data" / "agent-workbench.db"
     app_data = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
     return app_data / "AgentWorkbench" / "data" / "agent-workbench.db"
 
