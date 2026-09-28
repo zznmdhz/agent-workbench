@@ -24,16 +24,22 @@
 .mvpHeatPeriod button{border:1px solid #dce5f1;background:#fff;border-radius:7px;padding:5px 10px;color:#506783;min-height:30px}
 .mvpHeatPeriod button:disabled{opacity:.45;cursor:default}
 .mvpHeatScroll{overflow-x:auto;max-width:100%;padding:2px 2px 12px}
-.mvpHeatGrid{display:grid;gap:4px;width:max-content}
-.mvpHeatyear{grid-auto-flow:column;grid-template-rows:repeat(7,16px);grid-auto-columns:16px}
-.mvpHeatmonth{grid-template-columns:repeat(7,30px);grid-auto-rows:30px}
-.mvpHeatweek{grid-template-columns:repeat(7,44px);grid-auto-rows:44px}
-.mvpHeatday{grid-template-columns:repeat(12,38px);grid-auto-rows:38px}
-.mvpHeatmonths{grid-template-columns:repeat(6,78px);grid-auto-rows:34px}
+.mvpHeatMonthHead{display:grid;gap:4px;width:100%;min-width:850px;margin-bottom:7px;color:#7588a1;font-size:11px}
+.mvpHeatMonthHead span{white-space:nowrap}
+.mvpHeatGrid{display:grid;gap:4px;width:100%}
+.mvpHeatyear{min-width:850px;grid-auto-flow:column;grid-template-rows:repeat(7,20px);grid-auto-columns:minmax(0,1fr)}
+.mvpHeatmonth{grid-template-columns:repeat(7,minmax(0,1fr));grid-auto-rows:48px}
+.mvpHeatweek{grid-template-columns:repeat(7,minmax(0,1fr));grid-auto-rows:64px}
+.mvpHeatday{grid-template-columns:repeat(12,minmax(0,1fr));grid-auto-rows:52px}
+.mvpHeatmonths{grid-template-columns:repeat(6,minmax(0,1fr));grid-auto-rows:52px}
+.mvpHeatLoading{min-height:155px;display:grid;place-items:center;margin:0;color:#6b7f99;font-size:13px;background:#f7faff;border-radius:8px}
+.mvpHeatTooltip{position:fixed;z-index:100;transform:translate(-50%,-100%);width:290px;max-width:calc(100vw - 24px);pointer-events:none;display:grid;gap:5px;padding:12px 14px;background:#1e334d;color:#fff;border-radius:9px;box-shadow:0 12px 28px #18335438;font-size:12px}
+.mvpHeatTooltip.below{transform:translate(-50%,0)}
+.mvpHeatTooltip strong{font-size:17px}.mvpHeatTooltip span{color:#d7e3f2;line-height:1.4}
 .mvpHeatCell,.mvpHeatSpacer{border:0;border-radius:4px;min-width:0;min-height:0}
 .mvpHeatCell{display:grid;place-items:center;padding:0;color:#294365;font-size:10px}
-.mvpHeatCell:not(:disabled):hover{outline:2px solid #284fa7;outline-offset:1px}
-.mvpHeatCell:disabled{cursor:default}
+.mvpHeatCell:hover,.mvpHeatCell:focus-visible{outline:2px solid #284fa7;outline-offset:1px}
+.mvpHeatCell[aria-disabled=true]{cursor:default}
 .mvpHeatCell.level0,.mvpHeatLegend .level0{background:#e9eff7}
 .mvpHeatCell.level1,.mvpHeatLegend .level1{background:#c6dbfa}
 .mvpHeatCell.level2,.mvpHeatLegend .level2{background:#8fb8f4}
@@ -48,4 +54,4 @@
 .mvpModelButton{border:0;background:transparent;color:#2860d1;padding:3px 0;text-align:left;font-size:12px}
 .mvpModelButton:hover{text-decoration:underline}
 .mvpSessions b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-@media(max-width:600px){.mvpAgentSwitch{width:100%}.mvpHeatPanel .mvpPanelHead{flex-direction:column}.mvpHeatMeta{flex-direction:column;align-items:flex-start}.mvpHeatPeriod{flex-wrap:wrap}.mvpHeatPeriod strong{min-width:0}}
+@media(max-width:600px){.mvpAgentSwitch{width:100%}.mvpHeatPanel .mvpPanelHead{flex-direction:column}.mvpHeatMeta{flex-direction:column;align-items:flex-start}.mvpHeatPeriod{flex-wrap:wrap}.mvpHeatPeriod strong{min-width:0}.mvpHeatmonth{grid-auto-rows:42px}.mvpHeatweek{grid-auto-rows:46px}.mvpHeatday{grid-template-columns:repeat(6,minmax(0,1fr));grid-auto-rows:43px}.mvpHeatmonths{grid-template-columns:repeat(3,minmax(0,1fr))}}

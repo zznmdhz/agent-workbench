@@ -6,6 +6,8 @@
 - Show Codex's native session name when available; add visible Agent switching, year/month/week/day Token heatmaps, custom date ranges, and a clear count of sessions with usage in the selected period.
 - Keep Hermes session/model totals separate from date and hour cells, mark future cells, and make long session titles available in full.
 - Speed up initial Codex scans by skipping unrelated JSONL records before parsing large message or tool-output bodies.
+- Make heatmap grids fill the available width, add month markers and hover details, show populated-cell counts, and clear stale cells while another period is loading.
+- Clarify that usage is local to the running computer and document a device-aware export/import design for future Mac/Windows aggregation.
 - Complete macOS automated and browser testing. Windows v0.4.2 installer and update regression remain to be run before a release.
 
 ## 0.4.1 — Windows automatic update
