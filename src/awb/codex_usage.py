@@ -1,4 +1,4 @@
-"""Codex request-level usage extraction for the Windows MVP.
+"""Codex request-level usage extraction for the local MVP.
 
 Adapted from the MIT-licensed CC Switch session usage algorithm:
 https://github.com/farion1231/cc-switch/blob/e0f70019b2758f5b6b9a04dd60e4689481a0c0ac/src-tauri/src/services/session_usage_codex.rs
@@ -79,9 +79,16 @@ def _parent_id(meta: dict) -> str | None:
     return spawn.get("parent_thread_id") if isinstance(spawn, dict) else None
 
 
-def _records(path: Path) -> Iterator[tuple[int, dict]]:
+def _records(path: Path, *, usage_only: bool = False) -> Iterator[tuple[int, dict]]:
     with path.open("rb") as stream:
         while line := stream.readline():
+            # Tool output and message bodies can make rollouts several GB. Only these
+            # three record types affect usage, model or session identity.
+            if (usage_only and b'"token_count"' not in line and b'"session_meta"' not in line
+                    and b'"turn_context"' not in line):
+                if not line.endswith(b"\n"):
+                    return
+                continue
             if not line.endswith(b"\n"):
                 try:
                     row = json.loads(line)
@@ -132,7 +139,7 @@ def _parse(path: Path) -> _Parsed:
     previous_signature = None
     event_index = 0
     events = []
-    for offset, record in _records(path):
+    for offset, record in _records(path, usage_only=True):
         typ = record.get("type")
         payload = record.get("payload") or {}
         if typ == "session_meta" and native_id is None:

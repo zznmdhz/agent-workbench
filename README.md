@@ -1,24 +1,26 @@
 # Agent Workbench
 
-本机多 Agent 用量工作台。当前 **v0.4.1 是用量测试版**：只读扫描 Codex、Claude Code 原生会话日志，以及 Hermes 本机 `state.db`，不修改原始记录。源码可在 macOS 和 Windows 运行；当前公开安装包仅支持 Windows。
+本机多 Agent 用量工作台。当前开发分支为 **v0.4.2 测试版**：只读扫描 Codex、Claude Code 原生会话日志，以及 Hermes 本机 `state.db`，不修改原始记录。代码同时支持 macOS 和 Windows；v0.4.2 的 Mac 应用可从本分支构建，Windows v0.4.2 安装包仍待实机验证。GitHub Releases 当前公开的 Windows 安装包为 v0.4.1。
 
-当前工作分支的本机预览已移除密码页，打开 `http://127.0.0.1:8765/` 即可查看仪表盘。此修改尚未打包发布；GitHub 上的 v0.4.1 安装包仍使用旧密码流程。
+v0.4.2 本机应用已移除密码页，打开 `http://127.0.0.1:8765/` 即可查看仪表盘。已发布的 v0.4.1 Windows 安装包仍使用旧密码流程。
 
-当前工作分支的仪表盘可按任意起止日期（最长十年）、Agent 与模型筛选，请求、输入、缓存读取／写入、输出、热力图、模型和会话联动展示。热力图提供年／月／周／日粒度，Codex 会话优先使用原生可读名称。Codex 与 Claude Code 可按请求时间归属；Hermes 当前只有会话／模型汇总，完整落在所选时间段内的记录会计入总数，但无法准确拆到每天；跨越查询边界的汇总记录会单独计数并暂不纳入。详情见[多 Agent 用量口径](docs/project/MULTI_AGENT_USAGE_V0.4.md)。价格、聊天正文、文件和跨设备管理尚未纳入此版本。
+v0.4.2 仪表盘可按任意起止日期（最长十年）、Agent 与模型筛选，请求、输入、缓存读取／写入、输出、热力图、模型和会话联动展示。热力图提供年／月／周／日粒度，Codex 会话优先使用原生可读名称。Codex 与 Claude Code 可按请求时间归属；Hermes 当前只有会话／模型汇总，完整落在所选时间段内的记录会计入总数，但无法准确拆到每天；跨越查询边界的汇总记录会单独计数并暂不纳入。详情见[多 Agent 用量口径](docs/project/MULTI_AGENT_USAGE_V0.4.md)。价格、聊天正文、文件和跨设备管理尚未纳入此版本。
 
 ## Windows 安装与测试
 
 从 [Releases](https://github.com/zznmdhz/agent-workbench/releases) 下载 `AgentWorkbench-Setup-0.4.1-Windows-x64.exe`，双击安装，从开始菜单打开 **Agent Workbench**。浏览器会自动打开本机页面，首次在网页创建至少 12 位密码。普通用户无需命令行。v0.4.1 起，安装版登录后会自动检查 GitHub 发布、下载并校验新安装包，然后关闭旧进程、静默安装并重新打开。安装器也会先通知运行中的工作台退出，再处理占用文件。v0.4.0 及更早版本尚无内置更新器，需要这一次手动安装 v0.4.1。详细步骤及验收清单见 [Windows 测试说明](docs/MVP_WINDOWS_TEST.md)。便携 ZIP 保持手动替换，不与安装版同时开启。
 
-## macOS 源码预览
+## macOS 应用测试
 
-在 Mac 上完成下方依赖安装和构建后，使用独立测试数据库启动，避免影响已有数据：
+在 Mac 上运行 `bash packaging/build_mac.sh` 可生成 `dist/mac/AgentWorkbench.app`。双击应用会在后台启动本机服务并打开浏览器；关闭时在页面点击“关闭工作台”。首次读取历史日志可能需要一些时间，尤其是大体积 Codex 会话。应用默认读取 `~/.codex`、`~/.claude` 和 `~/.hermes/state.db`，数据保存在 `~/Library/Application Support/AgentWorkbench/data/`。详细操作见 [Mac 测试说明](docs/MAC_TEST.md)。当前 Mac 应用是本机构建的未公证测试版，尚未发布为 GitHub 安装包。
+
+如需隔离数据库的源码预览，在 Mac 上完成下方依赖安装和构建后运行：
 
 ```bash
 uv run python packaging/desktop_entrypoint.py --db .local/mac-review/usage.db --no-browser
 ```
 
-打开 `http://127.0.0.1:8765/`。默认读取 `~/.codex`、`~/.claude` 和 `~/.hermes/state.db`；如 Hermes 安装位置不同，可为启动命令设置 `HERMES_STATE_DB`。Mac 默认工作台数据库位于 `~/Library/Application Support/AgentWorkbench/data/`，但上述预览显式使用 `.local/` 中的独立数据库。源码预览不等于已提供 macOS 安装包或自动更新。
+打开 `http://127.0.0.1:8765/`。如 Hermes 安装位置不同，可在启动前设置 `HERMES_STATE_DB`。上述预览使用 `.local/` 中的独立数据库；Mac 测试版尚无自动更新。
 
 ## 数据来源与对账
 
