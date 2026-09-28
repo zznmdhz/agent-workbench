@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1 — Conversation browsing controls (unreleased)
+
+- Remove the dense per-run timeline from the dashboard while keeping elapsed-time summaries and the time heatmap.
+- Add independent single-day/date-range controls and All/Codex/Claude/Hermes switching to the conversation list; open messages within the same selected range.
+- Build and verify the macOS test app; keep the Windows build and version paths aligned pending Windows device testing.
+
 ## 0.5.0 — Local conversation and elapsed-time review (unreleased)
 
 - Add a Token/time switch to the shared year, month, week and day heatmap.
@@ -74,3 +80,8 @@
 - Verified installation, synthetic end-to-end collection, real Windows stats-only import, and backup/restore.
 
 Mac/NAS deployment and real cross-machine continuation remain outside this Windows release. The installer is not code-signed and does not add login autostart or automatic updates.
+
+## 0.1.0-preview.1 — Windows portable preview
+
+- Provide a Windows portable ZIP started with `Start-AgentWorkbench.cmd`, local owner password setup, and a browser page at `127.0.0.1:8765`.
+- Include Codex/Hermes collection instructions in the portable package. Startup, readiness, web assets and login passed a Windows smoke test; Mac/NAS and dual-machine continuation were not validated.
