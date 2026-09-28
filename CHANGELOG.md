@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0 — Local conversation and elapsed-time review (unreleased)
+
+- Add a Token/time switch to the shared year, month, week and day heatmap.
+- Index Codex, Claude and Hermes conversation metadata locally and load original user/assistant text only when opening a session.
+- Show a daily conversation timeline and per-Agent cumulative versus overlap-deduplicated elapsed time.
+- Use completed Codex task events as verified time; label message-based Codex, Claude and Hermes spans as estimates, excluding unknown or over-six-hour spans.
+- Add Mac real-source verification and packaged-app smoke tests; keep Windows build paths updated for v0.5.0 pending Windows device testing.
+
 ## 0.4.2 — Mac test build and usage dashboard (unreleased)
 
 - Add Mac application build and local launch alongside the existing Windows packaging path. Discover Codex, Claude and Hermes native data on both systems without writing to those sources.

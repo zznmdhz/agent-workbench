@@ -31,6 +31,7 @@ if [ "$ready" -ne 1 ]; then
 fi
 curl --noproxy '*' -fsS "http://127.0.0.1:$port/" > "$scratch/index.html"
 curl --noproxy '*' -fsS "http://127.0.0.1:$port/v1/mvp/usage?day=2026-09-28&through=2026-09-28&heatmap_view=day" > "$scratch/usage.json"
+curl --noproxy '*' -fsS "http://127.0.0.1:$port/v1/mvp/activity?day=2026-09-28&through=2026-09-28&heatmap_view=day&focus_day=2026-09-28" > "$scratch/activity.json"
 python3 - "$scratch" <<'PY'
 import json
 from pathlib import Path
@@ -39,9 +40,11 @@ import sys
 root = Path(sys.argv[1])
 ready = json.loads((root / "ready.json").read_text())
 usage = json.loads((root / "usage.json").read_text())
+activity = json.loads((root / "activity.json").read_text())
 index = (root / "index.html").read_text()
-assert ready["status"] == "ready" and ready["app_version"] == "0.4.2"
+assert ready["status"] == "ready" and ready["app_version"] == "0.5.0"
 assert "/assets/index-" in index
 assert usage["status"] == "ready" and len(usage["heatmap"]) == 24
+assert len(activity["heatmap"]) == 24 and activity["summary"]["agent_ms"] == 0
 print("Mac packaged app smoke test passed")
 PY

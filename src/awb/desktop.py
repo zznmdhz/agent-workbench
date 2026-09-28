@@ -76,6 +76,9 @@ def run_desktop(db_path: Path, port: int = 8765, browser: bool = True,
         return
     with socket.socket() as probe:
         try:
+            # A just-stopped desktop server may leave this port in TIME_WAIT.
+            # Uvicorn can reuse it; the preflight probe must use the same rule.
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))
         except OSError:
             _show_error(f"端口 {port} 已被其他程序占用。请先关闭旧版工作台或占用该端口的程序，再重试。")

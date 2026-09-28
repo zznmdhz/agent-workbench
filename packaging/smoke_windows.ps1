@@ -15,7 +15,7 @@ try {
         try { $ready = Invoke-RestMethod -Uri "$base/health/ready" -TimeoutSec 2; break }
         catch { Start-Sleep -Milliseconds 200 }
     }
-    if ($null -eq $ready -or $ready.app_version -ne '0.4.2') { throw 'Packaged app did not reach v0.4.2 ready state' }
+    if ($null -eq $ready -or $ready.app_version -ne '0.5.0') { throw 'Packaged app did not reach v0.5.0 ready state' }
     $homePage = Invoke-WebRequest -Uri "$base/" -TimeoutSec 10
     if ($homePage.StatusCode -ne 200 -or $homePage.Content -notmatch '(/assets/index-[^" ]+\.js)') {
         throw 'Packaged app did not serve the compiled dashboard'
@@ -33,6 +33,10 @@ try {
     $today = (Get-Date).ToString('yyyy-MM-dd')
     $from = '2026-01-01'
     $usage = Invoke-RestMethod -Uri "$base/v1/mvp/usage?day=$from&through=$today&tz=Asia%2FHong_Kong" -TimeoutSec 120
+    $activity = Invoke-RestMethod -Uri "$base/v1/mvp/activity?day=$today&through=$today&tz=Asia%2FHong_Kong&heatmap_view=day&focus_day=$today" -TimeoutSec 120
+    if ($activity.heatmap.Count -ne 24 -or $null -eq $activity.summary.wall_ms) {
+        throw 'Packaged activity endpoint did not return the 24-hour view'
+    }
     if ($usage.status -ne 'ready' -or $usage.summary.requests -le 0) { throw 'Packaged app returned no usage' }
     if ($usage.summary.fresh_input_tokens + $usage.summary.cached_input_tokens + $usage.summary.cache_creation_tokens -ne $usage.summary.input_tokens) {
         throw 'Input and cache totals do not reconcile across agents'

@@ -183,6 +183,25 @@ CREATE TABLE IF NOT EXISTS mvp_claude_files(
   source_file TEXT PRIMARY KEY, size_bytes INTEGER NOT NULL, modified_ns INTEGER NOT NULL,
   scanned_at TEXT NOT NULL, status TEXT NOT NULL, parser_version TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS mvp_activity_files(
+  agent TEXT NOT NULL, source_file TEXT NOT NULL, size_bytes INTEGER NOT NULL,
+  modified_ns INTEGER NOT NULL, status TEXT NOT NULL,
+  PRIMARY KEY(agent,source_file)
+);
+CREATE TABLE IF NOT EXISTS mvp_activity_messages(
+  agent TEXT NOT NULL, native_id TEXT NOT NULL, message_id TEXT NOT NULL,
+  occurred_at TEXT NOT NULL, role TEXT NOT NULL, final INTEGER NOT NULL DEFAULT 0,
+  preview TEXT NOT NULL DEFAULT '', source_file TEXT NOT NULL, source_offset INTEGER NOT NULL,
+  PRIMARY KEY(agent,source_file,source_offset)
+);
+CREATE INDEX IF NOT EXISTS ix_mvp_activity_messages_time ON mvp_activity_messages(occurred_at,agent);
+CREATE INDEX IF NOT EXISTS ix_mvp_activity_messages_session ON mvp_activity_messages(agent,native_id,occurred_at);
+CREATE TABLE IF NOT EXISTS mvp_activity_runs(
+  agent TEXT NOT NULL, native_id TEXT NOT NULL, run_id TEXT NOT NULL,
+  start_at TEXT NOT NULL, end_at TEXT NOT NULL, source_file TEXT NOT NULL,
+  PRIMARY KEY(agent,source_file,run_id)
+);
+CREATE INDEX IF NOT EXISTS ix_mvp_activity_runs_time ON mvp_activity_runs(start_at,end_at);
 """
 
 

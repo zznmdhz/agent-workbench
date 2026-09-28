@@ -18,6 +18,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import __version__
+from .activity import conversation as mvp_conversation
+from .activity import dashboard as mvp_activity_dashboard
 from .auth import (
     check_rate,
     clear_failures,
@@ -514,6 +516,27 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
             return mvp_session_requests(db, agent, native_id, day, through or day, tz, model=model, limit=limit)
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, "Invalid usage date range or timezone") from exc
+
+    @app.get("/v1/mvp/activity")
+    def mvp_activity(day: str, through: str | None = None, tz: str = "Asia/Hong_Kong",
+                     heatmap_view: str = "year", focus_day: str | None = None,
+                     agent: str | None = None, _: str = Depends(require_owner)):
+        try:
+            return mvp_activity_dashboard(db, day, through or day, tz,
+                                          heatmap_view=heatmap_view, focus_day=focus_day,
+                                          agent=agent)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(422, "Invalid activity date range or timezone") from exc
+
+    @app.get("/v1/mvp/activity/sessions/{agent}/{native_id}/conversation")
+    def mvp_activity_conversation(agent: str, native_id: str,
+                                  day: str | None = None, tz: str = "Asia/Hong_Kong",
+                                  offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
+                                  _: str = Depends(require_owner)):
+        try:
+            return mvp_conversation(db, agent, native_id, offset=offset, limit=limit, day=day, tz=tz)
+        except ValueError as exc:
+            raise HTTPException(422, "Invalid conversation source") from exc
 
     @app.get("/v1/timeline")
     def daily_timeline(day: str, tz: str = "Asia/Hong_Kong", device_ids: list[str] = Query(default=[]),
