@@ -1,9 +1,8 @@
-"""Windowless Windows launcher for the local workbench."""
+"""Local desktop launcher for Windows and macOS."""
 
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import socket
 import sys
@@ -14,15 +13,16 @@ from threading import Event, Thread
 import httpx
 import uvicorn
 
-from .collector import Outbox, run_cycle
+from . import __version__
 from .db import Database
-from .local import prepare_local_collector
 
 
 def default_db_path() -> Path:
     executable_dir = Path(sys.executable).resolve().parent
     if (executable_dir / "portable.flag").exists():
         return executable_dir / "data" / "agent-workbench.db"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "AgentWorkbench" / "data" / "agent-workbench.db"
     app_data = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
     return app_data / "AgentWorkbench" / "data" / "agent-workbench.db"
 
@@ -57,29 +57,9 @@ def _is_workbench(url: str) -> bool:
         with httpx.Client(timeout=1) as client:
             result = client.get(url + "/health/ready")
         body = result.json()
-        return result.status_code == 200 and body.get("status") == "ready" and body.get("app_version") == "0.2.4"
+        return result.status_code == 200 and body.get("status") == "ready" and body.get("app_version") == __version__
     except (httpx.HTTPError, ValueError):
         return False
-
-
-def _collect(db_path: Path, port: int, stop: Event) -> None:
-    store = Database(db_path)
-    config_path = db_path.parent / "collector.json"
-    outbox = Outbox(db_path.parent / "outbox.db")
-    while not stop.is_set():
-        try:
-            with store.read() as conn:
-                owner = conn.execute("SELECT 1 FROM owner WHERE id=1").fetchone()
-            if not owner:
-                stop.wait(2)
-                continue
-            prepare_local_collector(store, config_path, port)
-            result = run_cycle(json.loads(config_path.read_text(encoding="utf-8")), outbox)
-            recovering_history = result.get("backfill", {}).get("units_processed", 0) > 0
-            stop.wait(1 if result.get("pending") or recovering_history else 15)
-        except Exception as exc:
-            print(f"Local collector: {type(exc).__name__}: {exc}", file=sys.stderr)
-            stop.wait(15)
 
 
 def run_desktop(db_path: Path, port: int = 8765, browser: bool = True,
@@ -96,6 +76,9 @@ def run_desktop(db_path: Path, port: int = 8765, browser: bool = True,
         return
     with socket.socket() as probe:
         try:
+            # A just-stopped desktop server may leave this port in TIME_WAIT.
+            # Uvicorn can reuse it; the preflight probe must use the same rule.
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))
         except OSError:
             _show_error(f"端口 {port} 已被其他程序占用。请先关闭旧版工作台或占用该端口的程序，再重试。")
@@ -119,8 +102,6 @@ def run_desktop(db_path: Path, port: int = 8765, browser: bool = True,
                                           workers=1, access_log=False, log_level="warning"))
     service.state.shutdown_callback = lambda: setattr(server, "should_exit", True)
     stop = Event()
-    collector_thread = Thread(target=_collect, args=(db_path, port, stop), name="awb-local-collector", daemon=True)
-    collector_thread.start()
 
     if browser:
         def open_when_ready() -> None:
@@ -135,7 +116,6 @@ def run_desktop(db_path: Path, port: int = 8765, browser: bool = True,
         server.run()
     finally:
         stop.set()
-        collector_thread.join(timeout=2)
         sys.stdout, sys.stderr = previous_stdout, previous_stderr
         log_file.close()
 

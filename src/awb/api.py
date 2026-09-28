@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import secrets
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -16,6 +17,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import __version__
+from .activity import conversation as mvp_conversation
+from .activity import dashboard as mvp_activity_dashboard
 from .auth import (
     check_rate,
     clear_failures,
@@ -44,8 +48,11 @@ from .local import (
     set_local_source_policy,
 )
 from .models import Batch
+from .multi_usage import dashboard as mvp_dashboard
+from .multi_usage import session_requests as mvp_session_requests
 from .resources import record_samples
 from .stats import calculate, metric_contributors, timeline
+from .update import UpdateManager
 
 
 class Credentials(BaseModel):
@@ -204,10 +211,12 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     path = Path(db_path or os.environ.get("AWB_DB_PATH", "./data/agent-workbench.db"))
     db = Database(path)
     db.initialize()
-    app = FastAPI(title="Agent Workbench", version="0.2.4")
+    app = FastAPI(title="Agent Workbench", version=__version__)
     app.state.db = db
     app.state.desktop_mode = desktop_mode
+    app.state.local_csrf = secrets.token_urlsafe(24)
     app.state.shutdown_callback = None
+    app.state.updater = UpdateManager()
 
     def owner_exists() -> bool:
         with db.read() as conn:
@@ -242,10 +251,12 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     def ready():
         with db.read() as conn:
             version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
-        return {"status": "ready", "schema_version": version, "app_version": "0.2.4"}
+        return {"status": "ready", "schema_version": version, "app_version": __version__}
 
     @app.post("/auth/login")
     def auth_login(body: Credentials, request: Request, response: Response):
+        if desktop_mode:
+            raise HTTPException(410, "Local desktop password login has been removed")
         subject = request.client.host if request.client else "unknown"
         check_rate(db, "login", subject)
         try:
@@ -259,10 +270,13 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
 
     @app.get("/auth/setup-status")
     def setup_status():
-        return {"needs_setup": not owner_exists(), "web_setup_available": desktop_mode}
+        return {"needs_setup": False if desktop_mode else not owner_exists(),
+                "web_setup_available": False}
 
     @app.post("/auth/setup")
     def auth_setup(body: SetupCredentials, request: Request, response: Response):
+        if desktop_mode:
+            raise HTTPException(410, "Local desktop password setup has been removed")
         require_local_desktop(request)
         if owner_exists():
             raise HTTPException(409, "Owner account already exists")
@@ -298,6 +312,8 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
 
     @app.post("/auth/logout")
     def auth_logout(request: Request, response: Response, _: None = Depends(require_owner_write)):
+        if desktop_mode:
+            raise HTTPException(410, "Local desktop password logout has been removed")
         token = request.cookies.get("awb_session", "")
         with db.tx() as conn:
             conn.execute("DELETE FROM web_sessions WHERE token_hash=?", (token_hash(token),))
@@ -316,6 +332,21 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
             raise HTTPException(503, "Desktop shutdown unavailable")
         background_tasks.add_task(app.state.shutdown_callback)
         return {"stopping": True}
+
+    @app.get("/v1/local/update")
+    def update_status(request: Request, check: bool = False, _: str = Depends(require_owner)):
+        require_local_desktop(request)
+        return app.state.updater.check() if check else app.state.updater.status()
+
+    @app.post("/v1/local/update")
+    def update_start(request: Request, _: None = Depends(require_owner_write)):
+        require_local_desktop(request)
+        if app.state.shutdown_callback is None:
+            raise HTTPException(503, "Desktop shutdown unavailable")
+        try:
+            return app.state.updater.start(app.state.shutdown_callback)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
 
     @app.post("/v1/pairing-codes")
     def pairing_code(_: None = Depends(require_owner_write)):
@@ -466,6 +497,46 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
             return calculate(db, day, tz, device_ids, agent_ids, model_ids, through)
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, "Invalid day or timezone") from exc
+
+    @app.get("/v1/mvp/usage")
+    def mvp_usage(day: str, through: str | None = None, tz: str = "Asia/Hong_Kong",
+                  agent: str | None = None, model: str | None = None,
+                  heatmap_view: str = "year", _: str = Depends(require_owner)):
+        try:
+            return mvp_dashboard(db, day, through or day, tz, agent=agent, model=model,
+                                 heatmap_view=heatmap_view)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(422, "Invalid usage date range or timezone") from exc
+
+    @app.get("/v1/mvp/usage/sessions/{agent}/{native_id}/requests")
+    def mvp_usage_session_requests(agent: str, native_id: str, day: str, through: str | None = None,
+                                   tz: str = "Asia/Hong_Kong", model: str | None = None,
+                                   limit: int = Query(100, ge=1, le=200), _: str = Depends(require_owner)):
+        try:
+            return mvp_session_requests(db, agent, native_id, day, through or day, tz, model=model, limit=limit)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(422, "Invalid usage date range or timezone") from exc
+
+    @app.get("/v1/mvp/activity")
+    def mvp_activity(day: str, through: str | None = None, tz: str = "Asia/Hong_Kong",
+                     heatmap_view: str = "year", focus_day: str | None = None,
+                     agent: str | None = None, _: str = Depends(require_owner)):
+        try:
+            return mvp_activity_dashboard(db, day, through or day, tz,
+                                          heatmap_view=heatmap_view, focus_day=focus_day,
+                                          agent=agent)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(422, "Invalid activity date range or timezone") from exc
+
+    @app.get("/v1/mvp/activity/sessions/{agent}/{native_id}/conversation")
+    def mvp_activity_conversation(agent: str, native_id: str,
+                                  day: str | None = None, tz: str = "Asia/Hong_Kong",
+                                  offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
+                                  _: str = Depends(require_owner)):
+        try:
+            return mvp_conversation(db, agent, native_id, offset=offset, limit=limit, day=day, tz=tz)
+        except ValueError as exc:
+            raise HTTPException(422, "Invalid conversation source") from exc
 
     @app.get("/v1/timeline")
     def daily_timeline(day: str, tz: str = "Asia/Hong_Kong", device_ids: list[str] = Query(default=[]),

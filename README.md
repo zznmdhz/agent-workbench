@@ -1,61 +1,44 @@
-# Agent Workbench 跨 Agent 工作台
+# Agent Workbench
 
-一个部署在自己 NAS 上的个人工作台。Windows 与 macOS 的采集器只读访问本机 Codex、Hermes 记录，将可获得的会话、活动和用量同步到中心服务。网页按设备、Agent、模型和日期查看统计，并沿会话找到执行片段与文件线索。
+本机多 Agent 用量与会话工作台。当前开发分支为 **v0.5.0 测试版**：只读扫描 Codex、Claude Code 原生会话日志，以及 Hermes 本机 `state.db`，不修改原始记录。代码同时支持 macOS 和 Windows；v0.5.0 已在 Mac 上构建和验证，Windows 安装包仍待实机验证。GitHub Releases 当前公开的 Windows 安装包为 v0.4.1。
 
-项目按[产品与工程规划](docs/planning/02_EXECUTION_SPEC.md)开发。统计数据会标明来源、缺口和精度；历史来源没有保存的值不会被补造。
+v0.5.0 本机应用已移除密码页，打开 `http://127.0.0.1:8765/` 即可查看仪表盘。已发布的 v0.4.1 Windows 安装包仍使用旧密码流程。
 
-## 状态
+v0.5.0 仪表盘可按日期、Agent 与模型筛选 Token 用量，并通过两个按钮切换 Token／运行时间热力图；两个视图共用年／月／周／日导航。选一天可查看三种 Agent 的会话、时间轴和当天用户／Agent 文字消息。时间同时显示各 Agent 运行区间相加的累计时长与并行去重后的自然经过时间。Codex 有完整任务事件时使用源记录时长；缺事件的 Codex、Claude 和 Hermes 仅能按消息推算，界面会标明估算。Hermes Token 仍只有会话／模型汇总，不能准确拆到每天。完整口径见[会话与时间说明](docs/project/SESSION_TIME_V0.5.md)。当前数字只来自运行应用的这台电脑，Mac 与 Windows 尚未同步；跨设备方案见[多 Agent 用量口径](docs/project/MULTI_AGENT_USAGE_V0.4.md)。价格、工具轨迹、文件和跨设备管理尚未纳入此版本。
 
-**v0.2.4 是 Windows 单机安装版。** 网页可按日期、设备、Agent 和模型查看活动，从指标、时间线或搜索定位会话与具体轮次；会话页支持改名、逐轮分页、已采集正文、文件证据和当前文件检查。历史正文须由用户在网页选择来源和范围、预览后补采；无原始记录或未授权的内容不会被补造。Codex 子 Agent 的会话归属和累计 Token 计数已修正，并提供有备份、有预览报告的离线命令修复旧版索引；普通用户首次使用不需要命令行。Mac 采集、NAS 容器和真实双机接续仍需目标环境，因此整个跨机 PRD 尚未验收。详见[Windows 使用说明](docs/WINDOWS.md)、[产品审核与修改计划](docs/project/PRODUCT_AUDIT_AND_PLAN_2026-09-26.md)、[验证记录](docs/verification/README.md)和[剩余工作](docs/project/ROADMAP.md)。
+## Windows 安装与测试
 
-## 本地开发
+从 [Releases](https://github.com/zznmdhz/agent-workbench/releases) 下载 `AgentWorkbench-Setup-0.4.1-Windows-x64.exe`，双击安装，从开始菜单打开 **Agent Workbench**。浏览器会自动打开本机页面，首次在网页创建至少 12 位密码。普通用户无需命令行。v0.4.1 起，安装版登录后会自动检查 GitHub 发布、下载并校验新安装包，然后关闭旧进程、静默安装并重新打开。安装器也会先通知运行中的工作台退出，再处理占用文件。v0.4.0 及更早版本尚无内置更新器，需要这一次手动安装 v0.4.1。详细步骤及验收清单见 [Windows 测试说明](docs/MVP_WINDOWS_TEST.md)。便携 ZIP 保持手动替换，不与安装版同时开启。
 
-### Windows 安装版
+## macOS 应用测试
 
-[下载 Windows v0.2.4 安装程序](https://github.com/zznmdhz/agent-workbench/releases/tag/v0.2.4)。从开始菜单打开后，浏览器会自动打开，首次在网页创建管理员密码并自动登录；工作台会发现本机来源并开始仅统计采集。无需手动配对或复制来源 ID。另提供无需安装的便携 ZIP。数据与升级说明见 [Windows 使用说明](docs/WINDOWS.md)。
+在 Mac 上运行 `bash packaging/build_mac.sh` 可生成 `dist/mac/AgentWorkbench.app`。双击应用会在后台启动本机服务并打开浏览器；关闭时在页面点击“关闭工作台”。首次读取历史日志可能需要一些时间，尤其是大体积 Codex 会话。应用默认读取 `~/.codex`、`~/.claude` 和 `~/.hermes/state.db`，数据保存在 `~/Library/Application Support/AgentWorkbench/data/`。详细操作见 [Mac 测试说明](docs/MAC_TEST.md)。当前 Mac 应用是本机构建的未公证测试版，尚未发布为 GitHub 安装包。
 
-### 从源码运行
+如需隔离数据库的源码预览，在 Mac 上完成下方依赖安装和构建后运行：
 
-需要 Python 3.12、[uv](https://docs.astral.sh/uv/) 和 Node.js 22+/pnpm。依赖锁定在 `uv.lock` 与 `web/pnpm-lock.yaml`。
+```bash
+uv run python packaging/desktop_entrypoint.py --db .local/mac-review/usage.db --no-browser
+```
 
-```powershell
-uv sync --frozen
-uv run awb --help
+打开 `http://127.0.0.1:8765/`。如 Hermes 安装位置不同，可在启动前设置 `HERMES_STATE_DB`。上述预览使用 `.local/` 中的独立数据库；Mac 测试版尚无自动更新。
+
+## 数据来源与对账
+
+Codex 和 Claude 请求解析参考 MIT 许可的 [CC Switch](https://github.com/farion1231/cc-switch) 算法，并保留[上游许可](docs/third_party/CC_SWITCH_LICENSE.txt)。工作台独立读取 Agent 原生记录，不依赖 CC Switch 的安装或数据库。原 v0.3.0 范围见 [Codex MVP 规格](docs/project/CC_SWITCH_MVP.md)；旧版 PRD 保留在 `docs/planning/` 作为历史背景，不是当前安装版的功能承诺。
+
+## 开发
+
+需要 Python 3.12、[uv](https://docs.astral.sh/uv/)、Node.js 22+、pnpm。安装依赖并运行验证：
+
+```bash
+uv sync --frozen --group dev
 uv run pytest -q
 uv run ruff check src tests
 pnpm --dir web install --frozen-lockfile
 pnpm --dir web build
 ```
 
-首次本地运行：
-
-```powershell
-uv run awb open --db .local/server.db
-```
-
-这是供开发者使用的命令行模式，首次运行会在终端引导设置密码；普通用户请使用上方 Windows 安装版，在网页完成设置。然后在网页的“设备与设置”生成一次性配对码，再在采集机器运行：
-
-```powershell
-uv run awb pair http://127.0.0.1:8765 123456789
-uv run awb add-source codex "$HOME\.codex\sessions" --policy stats_only
-uv run awb add-source hermes "$HOME\AppData\Local\hermes\state.db" --policy stats_only
-```
-
-这里的 `123456789` 只是命令示例，实际使用网页生成的码。`add-source` 输出来源 ID；在网页确认来源、设备和采集策略后运行 `uv run awb collect-once` 或 `uv run awb collect`。跨机器需要可达的 HTTPS 地址；不要将开发用 HTTP 绑定到公网。macOS 根目录以当地实际安装路径为准，不能照抄 Windows 示例。详见[运行手册](docs/RUNBOOK.md)。
-
-所有私有配置、队列、会话与诊断产物保存在 `.local/` 或自选数据目录，不进入仓库。不要把 Codex、Hermes 原目录、登录信息或真实聊天内容提交到公开仓库。
-
-## 规划与项目管理
-
-- [产品原始 PRD](docs/planning/跨Agent工作台_PRD_v0.1.md)
-- [执行规格](docs/planning/02_EXECUTION_SPEC.md)
-- [任务计划](docs/planning/03_IMPLEMENTATION.md)
-- [验收规范](docs/planning/04_ACCEPTANCE.md)
-- [验证记录](docs/verification/README.md)
-- [运行手册](docs/RUNBOOK.md)
-- [公开路线图](docs/project/ROADMAP.md)
-
-[GitHub Issues](https://github.com/zznmdhz/agent-workbench/issues) 记录 13 项待完成开发与实机验收任务，[Milestones](https://github.com/zznmdhz/agent-workbench/milestones) 对应 P0、V0.1、V0.2、V0.3。公开仓库不承载用户设备的私人证据；真实探针报告在本机生成，只发布脱敏结论。
+默认私有数据库在 Windows 的 `%LOCALAPPDATA%\AgentWorkbench\data` 或 Mac 的 `~/Library/Application Support/AgentWorkbench/data/`，不会提交到仓库。本机 Codex/Hermes 原始数据不会随应用卸载而删除。
 
 ## 许可证
 

@@ -165,7 +165,7 @@ def test_explicit_local_file_check_reports_current_stat_only(tmp_path: Path):
             "2026-09-23T00:01:00Z", json.dumps(fact["content"]), "2026-09-23T00:01:00Z"))
         project(conn, fact)
     client = TestClient(app, base_url="http://127.0.0.1:8765", client=("127.0.0.1", 50000))
-    csrf = client.post("/auth/login", json={"password": "correct-horse-battery-staple"}).json()["csrf"]
+    csrf = client.get("/auth/me").json()["csrf"]
     result = client.post(f"/v1/local/files/{fact['event_id']}/check", headers={"x-awb-csrf": csrf})
     assert result.status_code == 200
     current = result.json()["current_access"]

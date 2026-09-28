@@ -78,6 +78,15 @@ def login(db: Database, password: str) -> tuple[str, str]:
 
 
 def require_owner(request: Request) -> str:
+    if getattr(request.app.state, "desktop_mode", False):
+        client = request.client.host if request.client else None
+        origin = request.headers.get("origin")
+        expected = str(request.base_url).rstrip("/")
+        if (client not in {"127.0.0.1", "::1"}
+                or request.url.hostname not in {"127.0.0.1", "localhost", "::1"}
+                or (origin and origin.rstrip("/") != expected)):
+            raise HTTPException(403, "Local desktop access only")
+        return request.app.state.local_csrf
     value = request.cookies.get("awb_session")
     if not value:
         raise HTTPException(401, "Login required")

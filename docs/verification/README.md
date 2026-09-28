@@ -11,6 +11,8 @@
 
 本目录只保存可以公开的测试方法、虚构样例和脱敏结果。完整本机探针报告放在 `.local/reports/`，不上传 GitHub。
 
+最新单机验证：[Mac v0.5.0 会话与时间视图](MAC_SESSIONS_0.5.0_2026-09-28.md)。这不改变上表中真实双机与 NAS 阶段的未验收状态。
+
 2026-09-23 本机验证：Windows Codex 15,761 条与 Hermes 22,042 条 stats_only 事件写入本地 outbox，合计 37,803 条，全部通过 Pydantic wire contract 验证；未传输到中心或 GitHub。`uv run pytest -q` 通过 5 个自动测试；`uv run ruff check src tests`、`cd web && pnpm build` 通过。GitHub CI 在 Windows/macOS/Linux 上通过代码测试；这不等于对应机器已运行真实 Agent 来源。此结果证明当前 Windows 安装的数据可读取和标准化，不证明所有版本/入口、统计完整性或跨机部署。当前机器没有 Docker，也没有可访问的 Mac/NAS 验收环境。
 
 2026-09-26 Windows v0.2.0 验证：`uv run pytest -q` 通过 8 项测试，`uv run ruff check src tests` 与 `pnpm --dir web build` 通过。Inno Setup 安装程序构建成功，在本机静默安装到测试目录后，安装版 EXE 的 `/health/ready`、网页首页和单 owner 登录通过。用虚构 Codex JSONL 测试自动发现、上传、会话与消息投影，待传归零。
