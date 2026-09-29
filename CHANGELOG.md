@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0 — Model intelligence and session discovery (2026-09-29)
+
+- Replace the redundant usage-period conversation panel with model comparison, share, trend, hourly frequency, request distribution, cache-rate charts and a model detail table. Make chart metrics switchable and keep Hermes session aggregates out of dated/request-level charts.
+- Add session sorting by text size, Agent duration, source size, message count and confirmed file count, with keyword scope and minimum-value filters.
+- Refresh the dashboard typography, spacing, surfaces and visual hierarchy for desktop and narrow screens.
+- Rebalance the session toolbar after visual review: date and Agent controls share space with search and quick sorting; hide infrequent conditions behind a clear expandable control.
+- Keep Mac and Windows discovery/archive paths aligned; Mac receives basic build and application checks, while real Windows testing remains pending.
+
 ## 0.6.0 — Durable archive and two-computer exchange (2026-09-29)
 
 - Persist discovered Codex, Claude and Hermes conversation text, Token observations, run intervals, source locations and file-operation indexes in Workbench-owned SQLite facts. Historical records remain readable after native Agent logs are removed, once they have been discovered.

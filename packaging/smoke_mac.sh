@@ -43,7 +43,7 @@ ready = json.loads((root / "ready.json").read_text())
 usage = json.loads((root / "usage.json").read_text())
 activity = json.loads((root / "activity.json").read_text())
 index = (root / "index.html").read_text()
-assert ready["status"] == "ready" and ready["app_version"] == "0.6.0"
+assert ready["status"] == "ready" and ready["app_version"] == "0.7.0"
 assert "/assets/index-" in index
 assert usage["status"] == "ready" and len(usage["heatmap"]) == 24
 assert len(activity["heatmap"]) == 24 and activity["summary"]["agent_ms"] == 0
