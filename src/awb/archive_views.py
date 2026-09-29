@@ -124,6 +124,76 @@ def usage(db: Database, day: str, through: str, tz: str, *, agent: str | None = 
             'note': '统计来自 Workbench 底库；Codex/Claude 按请求时间归属，Hermes 按完整会话汇总。'}
 
 
+def model_report(db: Database, day: str, through: str, tz: str, *, agent: str | None = None,
+                 model: str | None = None, device_id: str | None = None) -> dict:
+    """Small, chart-ready aggregates; never assign Hermes session totals to a day."""
+    if agent not in (*AGENTS, None):
+        raise ValueError('Invalid agent')
+    first, last, start, end, zone = _range(day, through, tz)
+    grain = 'day' if (last-first).days < 45 else 'week' if (last-first).days < 180 else 'month'
+    models = defaultdict(_empty)
+    series = defaultdict(_empty)
+    hours = defaultdict(_empty)
+    points = []
+    for row in _rows(db, 'usage', device_id):
+        name = row['agent']
+        model_name = row.get('model') or 'unknown'
+        if name not in AGENTS or agent not in (None, name) or (model and model != model_name):
+            continue
+        try:
+            if name == 'hermes':
+                seen = datetime.fromtimestamp(float(row['first_seen']), timezone.utc)
+                at = datetime.fromtimestamp(float(row['last_seen']), timezone.utc)
+                if seen < start or at >= end:
+                    continue
+                values = _values(row['input_tokens'], row['cache_read_tokens'],
+                                 row['cache_write_tokens'], row['output_tokens'], row['api_call_count'])
+            else:
+                at = _date(row['occurred_at'])
+                if not start <= at < end:
+                    continue
+                if name == 'codex':
+                    original = max(0, row['input_tokens'])
+                    read = min(original, max(0, row['cached_input_tokens']))
+                    values = _values(original-read, read, 0, row['output_tokens'])
+                else:
+                    values = _values(row['input_tokens'], row['cached_input_tokens'],
+                                     row['cache_creation_tokens'], row['output_tokens'])
+            key = (name, model_name)
+            _add(models[key], values)
+            if name == 'hermes':
+                continue
+            local = at.astimezone(zone)
+            day_key = local.date()
+            period = (day_key.isoformat() if grain == 'day' else
+                      day_key.strftime('%Y-%m') if grain == 'month' else
+                      date.fromordinal(day_key.toordinal()-day_key.weekday()).isoformat())
+            _add(series[(period, name, model_name)], values)
+            _add(hours[(local.hour, name, model_name)], values)
+            points.append({'agent': name, 'model': model_name, 'at': row['occurred_at'],
+                           'input_tokens': values['input_tokens'], 'output_tokens': values['output_tokens'],
+                           'cached_input_tokens': values['cached_input_tokens'],
+                           'total_tokens': values['total_tokens']})
+        except (ValueError, TypeError, KeyError, OverflowError):
+            continue
+    # Even sampling preserves the whole selected period while keeping the response small.
+    points.sort(key=lambda item: item['at'])
+    if len(points) > 400:
+        points = [points[i*(len(points)-1)//399] for i in range(400)]
+    return {'grain': grain, 'periods': _trend_dates(first, last, grain), 'models': [
+        {'agent': name, 'model': model_name, **value,
+         'cache_hit_rate': value['cached_input_tokens']/value['input_tokens']
+         if value['input_tokens'] else None}
+        for (name, model_name), value in sorted(models.items(), key=lambda item: -item[1]['total_tokens'])],
+        'series': [{'period': period, 'agent': name, 'model': model_name, **value}
+                   for (period, name, model_name), value in sorted(series.items())],
+        'hours': [{'hour': hour, 'agent': name, 'model': model_name, **value}
+                  for (hour, name, model_name), value in sorted(hours.items())],
+        'points': points, 'point_count': sum(value['requests'] for key, value in models.items()
+                                            if key[0] != 'hermes'),
+        'note': 'Hermes 只有完整会话的模型汇总，参与总量比较，不进入逐日、逐时和单次请求图。'}
+
+
 def requests(db: Database, agent: str, native_id: str, day: str, through: str, tz: str,
              *, model: str | None = None, limit: int = 100, device_id: str | None = None) -> dict:
     _, _, start, end, _ = _range(day, through, tz)
@@ -253,35 +323,74 @@ def activity(db: Database, day: str, through: str, tz: str, *, heatmap_view: str
 
 
 def browser(db: Database, day: str, through: str, tz: str, *, agent: str | None = None,
-            query: str = '', device_id: str | None = None) -> dict:
+            query: str = '', device_id: str | None = None, search_in: str = 'all',
+            sort: str = 'recent', min_text: int = 0, min_duration: int = 0,
+            has_files: bool = False, limit: int = 300) -> dict:
+    sort_keys = {'recent', 'oldest', 'text_desc', 'text_asc', 'duration_desc',
+                 'duration_asc', 'storage_desc', 'storage_asc', 'messages_desc',
+                 'messages_asc', 'files_desc'}
+    if sort not in sort_keys or search_in not in {'all', 'title', 'content', 'file'}:
+        raise ValueError('Invalid session filter')
+    if min_text < 0 or min_duration < 0 or not 1 <= limit <= 1000:
+        raise ValueError('Invalid session filter')
+    _, _, low, high, _ = _range(day, through, tz)
     result = activity(db, day, through, tz, agent=agent, device_id=device_id, session_range=True,
                       heatmap_view='custom')
     sessions = result['sessions']
     needle = query.strip().casefold()
     if len(needle) > 120:
         raise ValueError('Search term too long')
-    if needle:
-        matches = {}
-        for kind, field, label in [('message', 'body', '对话内容'), ('file', 'native_path', '文件路径')]:
-            for row in _rows(db, kind, device_id):
-                body = row.get(field) or ''
-                if needle in body.casefold():
-                    matches.setdefault(_session_key(row), {'type': label, 'excerpt': body[:160]})
-        sessions = [{**row, 'match': matches.get(_session_key(row),
-                     {'type': '标题', 'excerpt': row['title']})} for row in sessions
-                    if _session_key(row) in matches or needle in row['title'].casefold()
-                    or needle in row['preview'].casefold()]
-    counts = {name: sum(row['agent'] == name for row in sessions) for name in AGENTS}
+    session_keys = {_session_key(row) for row in sessions}
+    text_sizes = defaultdict(int)
+    matches = {}
+    for row in _rows(db, 'message', device_id):
+        key = _session_key(row)
+        if key not in session_keys or not low <= _date(row['occurred_at']) < high:
+            continue
+        body = row.get('body') or ''
+        text_sizes[key] += len(body)
+        if needle and search_in in {'all', 'content'} and needle in body.casefold():
+            matches.setdefault(key, {'type': '对话内容', 'excerpt': body[:160]})
+    file_paths = defaultdict(set)
+    for row in _rows(db, 'file', device_id):
+        key = _session_key(row)
+        if key not in session_keys:
+            continue
+        path = row.get('native_path') or ''
+        if row.get('relation') != 'referenced':
+            file_paths[key].add(path)
+        if needle and search_in in {'all', 'file'} and needle in path.casefold():
+            matches.setdefault(key, {'type': '文件路径', 'excerpt': path[:160]})
     meta = {_session_key(row): row for row in _rows(db, 'session', device_id)}
     local_id = archive.local_device_id(db)
     for row in sessions:
+        key = _session_key(row)
+        row['text_chars'] = text_sizes[key]
+        row['file_count'] = len(file_paths[key])
+        if needle:
+            title_match = search_in in {'all', 'title'} and needle in row['title'].casefold()
+            row['match'] = matches.get(key) or ({'type': '标题', 'excerpt': row['title']}
+                                                 if title_match else None)
         item = meta.get(_session_key(row), {})
         row['storage_bytes'] = item.get('payload_bytes') if row['agent'] == 'hermes' else item.get('record_bytes')
         row['storage_kind'] = 'payload' if row['agent'] == 'hermes' else 'record'
         row['can_open_folder'] = row['device_id'] == local_id and any(
             Path(raw).parent.is_dir() for raw in item.get('sources', []))
+    sessions = [row for row in sessions if (not needle or row.get('match'))
+                and row['text_chars'] >= min_text and row['agent_ms'] >= min_duration*60000
+                and (not has_files or row['file_count'] > 0)]
+    counts = {name: sum(row['agent'] == name for row in sessions) for name in AGENTS}
+    sort_field = {'recent': 'last_at', 'oldest': 'last_at', 'text_desc': 'text_chars',
+                  'text_asc': 'text_chars', 'duration_desc': 'agent_ms',
+                  'duration_asc': 'agent_ms', 'storage_desc': 'storage_bytes',
+                  'storage_asc': 'storage_bytes', 'messages_desc': 'messages',
+                  'messages_asc': 'messages', 'files_desc': 'file_count'}[sort]
+    descending = sort not in {'oldest', 'text_asc', 'duration_asc', 'storage_asc', 'messages_asc'}
+    sessions.sort(key=lambda row: (row[sort_field] if row[sort_field] is not None else
+                                   (-1 if descending else float('inf')), row['last_at']),
+                  reverse=descending)
     return {'day': day, 'through': through, 'query': query, 'counts': counts,
-            'session_count': len(sessions), 'sessions': sessions}
+            'session_count': len(sessions), 'sessions': sessions[:limit], 'sort': sort}
 
 
 def conversation(db: Database, agent: str, native_id: str, *, device_id: str,

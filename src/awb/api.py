@@ -516,6 +516,17 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, "Invalid usage date range or timezone") from exc
 
+    @app.get("/v1/mvp/usage/report")
+    def mvp_model_report(day: str, through: str | None = None, tz: str = "Asia/Hong_Kong",
+                         agent: str | None = None, model: str | None = None,
+                         device_id: str | None = None, _: str = Depends(require_owner)):
+        try:
+            archive.refresh(db)
+            return archive_views.model_report(db, day, through or day, tz,
+                agent=agent, model=model, device_id=device_id)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(422, "Invalid model report filter") from exc
+
     @app.get("/v1/mvp/usage/sessions/{agent}/{native_id}/requests")
     def mvp_usage_session_requests(agent: str, native_id: str, day: str, through: str | None = None,
                                    tz: str = "Asia/Hong_Kong", model: str | None = None,
@@ -560,11 +571,18 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     def mvp_activity_sessions(day: str, through: str | None = None,
                               tz: str = "Asia/Hong_Kong", agent: str | None = None,
                               q: str = "", device_id: str | None = None,
+                              search_in: str = "all", sort: str = "recent",
+                              min_text: int = Query(0, ge=0),
+                              min_duration: int = Query(0, ge=0),
+                              has_files: bool = False,
+                              limit: int = Query(300, ge=1, le=1000),
                               _: str = Depends(require_owner)):
         try:
             archive.refresh(db)
             return archive_views.browser(db, day, through or day, tz, agent=agent,
-                                         query=q, device_id=device_id)
+                query=q, device_id=device_id, search_in=search_in, sort=sort,
+                min_text=min_text, min_duration=min_duration,
+                has_files=has_files, limit=limit)
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, "Invalid session date range or timezone") from exc
 

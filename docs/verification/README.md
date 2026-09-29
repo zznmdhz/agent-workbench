@@ -11,7 +11,7 @@
 
 本目录只保存可以公开的测试方法、虚构样例和脱敏结果。完整本机探针报告放在 `.local/reports/`，不上传 GitHub。
 
-最新单机验证：[Mac v0.6.0 底库与设备交换](MAC_DURABLE_ARCHIVE_0.6.0_2026-09-29.md)；上轮见 [Mac v0.5.3 会话导航](MAC_SESSION_NAVIGATION_0.5.3_2026-09-29.md)。Mac 已生成同步包，真实 Windows 导入和双机运行仍未验收。
+最新单机验证：[Mac v0.7.0 模型分析与会话筛选](MAC_MODEL_REPORT_0.7.0_2026-09-29.md)；历史记录见 [Mac v0.6.0 底库与设备交换](MAC_DURABLE_ARCHIVE_0.6.0_2026-09-29.md)及 [Mac v0.5.3 会话导航](MAC_SESSION_NAVIGATION_0.5.3_2026-09-29.md)。Mac 已生成同步包，真实 Windows 导入和双机运行仍未验收。
 
 2026-09-23 本机验证：Windows Codex 15,761 条与 Hermes 22,042 条 stats_only 事件写入本地 outbox，合计 37,803 条，全部通过 Pydantic wire contract 验证；未传输到中心或 GitHub。`uv run pytest -q` 通过 5 个自动测试；`uv run ruff check src tests`、`cd web && pnpm build` 通过。GitHub CI 在 Windows/macOS/Linux 上通过代码测试；这不等于对应机器已运行真实 Agent 来源。此结果证明当前 Windows 安装的数据可读取和标准化，不证明所有版本/入口、统计完整性或跨机部署。当前机器没有 Docker，也没有可访问的 Mac/NAS 验收环境。
 

@@ -2,13 +2,13 @@
 
 各版本功能变化见 [更新日志](CHANGELOG.md)；已发布安装包与对应发布说明见 [GitHub Releases](https://github.com/zznmdhz/agent-workbench/releases)。开发测试版与已发布安装包的验证范围不同。
 
-本机多 Agent 用量与会话工作台。当前源码为 **v0.6.0 测试版**：在 macOS 和 Windows 上只读发现 Codex、Claude Code、Hermes 的原始记录，并将对话、Token、用时和文件索引归档进 Workbench 自己的 SQLite 底库。归档后的历史记录在 Agent 卸载或源记录消失后仍可查询。产出文件本身不备份。
+本机多 Agent 用量与会话工作台。当前源码为 **v0.7.0 测试版**：在 macOS 和 Windows 上只读发现 Codex、Claude Code、Hermes 的原始记录，并将对话、Token、用时和文件索引归档进 Workbench 自己的 SQLite 底库。归档后的历史记录在 Agent 卸载或源记录消失后仍可查询。产出文件本身不备份。
 
 两台电脑各自保有本地底库，通过现有 Sync_AI／Syncthing 文件夹交换设备专属数据包；页面可查看全部电脑汇总，也可只看 Mac 或 Windows。两端不直接共写一个 SQLite 数据库。Mac 默认查找 `~/Sync_AI`，Windows 默认查找 `B:\Sync_AI`；实际路径不同可在页面顶部修改。配置、口径和恢复方式见[底库与双机同步](docs/project/DURABLE_ARCHIVE_SYNC_V0.6.md)。本轮只在 Mac 做基础验证，Windows 实机同步和安装待回到 Windows 后验证。
 
-v0.6.0 延续 Token／运行时间热力图、按日期和 Agent 查会话、标题／正文／产出路径搜索、左右分栏、关键节点／完整详情、文件历史和打开所在文件夹。Hermes Token 仍只有会话／模型汇总，不能准确拆到每天。时间同时显示累计时长与并行去重后的自然经过时间，部分来源用时为估算。文件数只统计原始记录可确认的操作；详见[会话导航与文件口径](docs/project/SESSION_NAVIGATION_V0.5.3.md)和[会话与时间说明](docs/project/SESSION_TIME_V0.5.md)。本机页面地址为 `http://127.0.0.1:8765/`。
+v0.7.0 延续 Token／运行时间热力图、按日期和 Agent 查会话、标题／正文／产出路径搜索、左右分栏、关键节点／完整详情、文件历史和打开所在文件夹。Hermes Token 仍只有会话／模型汇总，不能准确拆到每天。时间同时显示累计时长与并行去重后的自然经过时间，部分来源用时为估算。文件数只统计原始记录可确认的操作；详见[会话导航与文件口径](docs/project/SESSION_NAVIGATION_V0.5.3.md)和[会话与时间说明](docs/project/SESSION_TIME_V0.5.md)。新增多图模型分析、缓存率和请求频率视图；会话可按文字量、用时、记录大小、消息及文件数排序，并按标题／内容／文件路径高级检索。图表和筛选口径见[模型分析与会话检索](docs/project/MODEL_REPORT_AND_SESSION_FILTERS_V0.7.md)。本机页面地址为 `http://127.0.0.1:8765/`。
 
-GitHub Releases 当前公开的 Windows 安装包为 v0.4.1；它的界面和登录流程与 v0.6.0 源码不同。
+GitHub Releases 当前公开的 Windows 安装包为 v0.4.1；它的界面和登录流程与 v0.7.0 源码不同。
 
 ## Windows 安装与测试
 
