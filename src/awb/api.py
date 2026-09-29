@@ -17,11 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import __version__
-from .activity import conversation as mvp_conversation
-from .activity import dashboard as mvp_activity_dashboard
-from .activity import session_browser as mvp_session_browser
-from .activity import session_inspector as mvp_session_inspector
+from . import __version__, archive, archive_views
 from .auth import (
     check_rate,
     clear_failures,
@@ -50,8 +46,6 @@ from .local import (
     set_local_source_policy,
 )
 from .models import Batch
-from .multi_usage import dashboard as mvp_dashboard
-from .multi_usage import session_requests as mvp_session_requests
 from .resources import record_samples
 from .reveal import open_folder, session_folder
 from .stats import calculate, metric_contributors, timeline
@@ -70,6 +64,10 @@ class SetupCredentials(BaseModel):
 class RevealSessionFolder(BaseModel):
     kind: str
     path: str | None = None
+
+
+class SyncRootRequest(BaseModel):
+    path: str
 
 
 class PairRequest(BaseModel):
@@ -509,30 +507,37 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     @app.get("/v1/mvp/usage")
     def mvp_usage(day: str, through: str | None = None, tz: str = "Asia/Hong_Kong",
                   agent: str | None = None, model: str | None = None,
-                  heatmap_view: str = "year", _: str = Depends(require_owner)):
+                  heatmap_view: str = "year", device_id: str | None = None,
+                  _: str = Depends(require_owner)):
         try:
-            return mvp_dashboard(db, day, through or day, tz, agent=agent, model=model,
-                                 heatmap_view=heatmap_view)
+            archive.refresh(db)
+            return archive_views.usage(db, day, through or day, tz, agent=agent, model=model,
+                                       heatmap_view=heatmap_view, device_id=device_id)
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, "Invalid usage date range or timezone") from exc
 
     @app.get("/v1/mvp/usage/sessions/{agent}/{native_id}/requests")
     def mvp_usage_session_requests(agent: str, native_id: str, day: str, through: str | None = None,
                                    tz: str = "Asia/Hong_Kong", model: str | None = None,
-                                   limit: int = Query(100, ge=1, le=200), _: str = Depends(require_owner)):
+                                   limit: int = Query(100, ge=1, le=200), device_id: str | None = None,
+                                   _: str = Depends(require_owner)):
         try:
-            return mvp_session_requests(db, agent, native_id, day, through or day, tz, model=model, limit=limit)
+            archive.refresh(db)
+            return archive_views.requests(db, agent, native_id, day, through or day, tz,
+                                          model=model, limit=limit, device_id=device_id)
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, "Invalid usage date range or timezone") from exc
 
     @app.get("/v1/mvp/activity")
     def mvp_activity(day: str, through: str | None = None, tz: str = "Asia/Hong_Kong",
                      heatmap_view: str = "year", focus_day: str | None = None,
-                     agent: str | None = None, _: str = Depends(require_owner)):
+                     agent: str | None = None, device_id: str | None = None,
+                     _: str = Depends(require_owner)):
         try:
-            return mvp_activity_dashboard(db, day, through or day, tz,
+            archive.refresh(db)
+            return archive_views.activity(db, day, through or day, tz,
                                           heatmap_view=heatmap_view, focus_day=focus_day,
-                                          agent=agent)
+                                          agent=agent, device_id=device_id)
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, "Invalid activity date range or timezone") from exc
 
@@ -540,39 +545,51 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     def mvp_activity_conversation(agent: str, native_id: str,
                                   day: str | None = None, through: str | None = None,
                                   tz: str = "Asia/Hong_Kong", view: str = "full",
+                                  device_id: str | None = None,
                                   offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
                                   _: str = Depends(require_owner)):
         try:
-            return mvp_conversation(db, agent, native_id, offset=offset, limit=limit,
-                                    day=day, through=through, tz=tz, view=view)
+            archive.refresh(db)
+            return archive_views.conversation(db, agent, native_id,
+                device_id=device_id or archive.local_device_id(db), offset=offset, limit=limit,
+                day=day, through=through, tz=tz, view=view)
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, "Invalid conversation source") from exc
 
     @app.get("/v1/mvp/activity/sessions")
     def mvp_activity_sessions(day: str, through: str | None = None,
                               tz: str = "Asia/Hong_Kong", agent: str | None = None,
-                              q: str = "",
+                              q: str = "", device_id: str | None = None,
                               _: str = Depends(require_owner)):
         try:
-            return mvp_session_browser(db, day, through or day, tz, agent=agent, query=q)
+            archive.refresh(db)
+            return archive_views.browser(db, day, through or day, tz, agent=agent,
+                                         query=q, device_id=device_id)
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, "Invalid session date range or timezone") from exc
 
     @app.get("/v1/mvp/activity/sessions/{agent}/{native_id}/inspector")
     def mvp_activity_session_inspector(agent: str, native_id: str,
+                                       device_id: str | None = None,
                                        _: str = Depends(require_owner)):
         try:
-            return mvp_session_inspector(db, agent, native_id)
+            archive.refresh(db)
+            return archive_views.inspector(db, agent, native_id,
+                device_id=device_id or archive.local_device_id(db))
         except ValueError as exc:
             raise HTTPException(422, "Invalid session source") from exc
 
     @app.post("/v1/mvp/activity/sessions/{agent}/{native_id}/reveal")
     def mvp_activity_session_reveal(agent: str, native_id: str,
                                     body: RevealSessionFolder, request: Request,
+                                    device_id: str | None = None,
                                     _: None = Depends(require_owner_write)):
         require_local_desktop(request)
         try:
-            detail = mvp_session_inspector(db, agent, native_id)
+            if device_id and device_id != archive.local_device_id(db):
+                raise HTTPException(409, "Open this folder on its original computer")
+            detail = archive_views.inspector(db, agent, native_id,
+                                             device_id=archive.local_device_id(db))
             folder = session_folder(detail, body.kind, body.path)
             open_folder(folder)
         except ValueError as exc:
@@ -582,6 +599,26 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
         except OSError as exc:
             raise HTTPException(503, "Could not open local folder") from exc
         return {"opened": True, "folder": str(folder)}
+
+    @app.get('/v1/archive/status')
+    def archive_status(_: str = Depends(require_owner)):
+        archive.refresh(db)
+        return archive.status(db)
+
+    @app.post('/v1/archive/sync-root')
+    def archive_set_sync_root(body: SyncRootRequest, request: Request,
+                              _: None = Depends(require_owner_write)):
+        require_local_desktop(request)
+        try:
+            archive.set_sync_root(db, body.path)
+            return archive.refresh(db, force=True)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.post('/v1/archive/refresh')
+    def archive_force_refresh(request: Request, _: None = Depends(require_owner_write)):
+        require_local_desktop(request)
+        return archive.refresh(db, force=True)
 
     @app.get("/v1/timeline")
     def daily_timeline(day: str, tz: str = "Asia/Hong_Kong", device_ids: list[str] = Query(default=[]),
