@@ -53,6 +53,7 @@ from .models import Batch
 from .multi_usage import dashboard as mvp_dashboard
 from .multi_usage import session_requests as mvp_session_requests
 from .resources import record_samples
+from .reveal import open_folder, session_folder
 from .stats import calculate, metric_contributors, timeline
 from .update import UpdateManager
 
@@ -64,6 +65,11 @@ class Credentials(BaseModel):
 class SetupCredentials(BaseModel):
     password: str
     confirmation: str
+
+
+class RevealSessionFolder(BaseModel):
+    kind: str
+    path: str | None = None
 
 
 class PairRequest(BaseModel):
@@ -533,12 +539,12 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     @app.get("/v1/mvp/activity/sessions/{agent}/{native_id}/conversation")
     def mvp_activity_conversation(agent: str, native_id: str,
                                   day: str | None = None, through: str | None = None,
-                                  tz: str = "Asia/Hong_Kong",
+                                  tz: str = "Asia/Hong_Kong", view: str = "full",
                                   offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
                                   _: str = Depends(require_owner)):
         try:
             return mvp_conversation(db, agent, native_id, offset=offset, limit=limit,
-                                    day=day, through=through, tz=tz)
+                                    day=day, through=through, tz=tz, view=view)
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, "Invalid conversation source") from exc
 
@@ -559,6 +565,23 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
             return mvp_session_inspector(db, agent, native_id)
         except ValueError as exc:
             raise HTTPException(422, "Invalid session source") from exc
+
+    @app.post("/v1/mvp/activity/sessions/{agent}/{native_id}/reveal")
+    def mvp_activity_session_reveal(agent: str, native_id: str,
+                                    body: RevealSessionFolder, request: Request,
+                                    _: None = Depends(require_owner_write)):
+        require_local_desktop(request)
+        try:
+            detail = mvp_session_inspector(db, agent, native_id)
+            folder = session_folder(detail, body.kind, body.path)
+            open_folder(folder)
+        except ValueError as exc:
+            raise HTTPException(422, "Invalid session folder") from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(404, "Local folder is unavailable") from exc
+        except OSError as exc:
+            raise HTTPException(503, "Could not open local folder") from exc
+        return {"opened": True, "folder": str(folder)}
 
     @app.get("/v1/timeline")
     def daily_timeline(day: str, tz: str = "Asia/Hong_Kong", device_ids: list[str] = Query(default=[]),

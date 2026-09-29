@@ -15,7 +15,7 @@ try {
         try { $ready = Invoke-RestMethod -Uri "$base/health/ready" -TimeoutSec 2; break }
         catch { Start-Sleep -Milliseconds 200 }
     }
-    if ($null -eq $ready -or $ready.app_version -ne '0.5.2') { throw 'Packaged app did not reach v0.5.2 ready state' }
+    if ($null -eq $ready -or $ready.app_version -ne '0.5.3') { throw 'Packaged app did not reach v0.5.3 ready state' }
     $homePage = Invoke-WebRequest -Uri "$base/" -TimeoutSec 10
     if ($homePage.StatusCode -ne 200 -or $homePage.Content -notmatch '(/assets/index-[^" ]+\.js)') {
         throw 'Packaged app did not serve the compiled dashboard'

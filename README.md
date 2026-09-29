@@ -2,11 +2,11 @@
 
 各版本功能变化见 [更新日志](CHANGELOG.md)；已发布安装包与对应发布说明见 [GitHub Releases](https://github.com/zznmdhz/agent-workbench/releases)。开发测试版与已发布安装包的验证范围不同。
 
-本机多 Agent 用量与会话工作台。当前开发分支为 **v0.5.2 测试版**：只读扫描 Codex、Claude Code 原生会话日志，以及 Hermes 本机 `state.db`，不修改原始记录。代码同时支持 macOS 和 Windows；v0.5.2 在 Mac 上构建和验证，Windows 安装包仍待实机验证。GitHub Releases 当前公开的 Windows 安装包为 v0.4.1。
+本机多 Agent 用量与会话工作台。当前源码为 **v0.5.3 测试版**：只读扫描 Codex、Claude Code 原生会话日志，以及 Hermes 本机 `state.db`，不修改原始记录。代码同时支持 macOS 和 Windows；v0.5.3 在 Mac 上做基础验证，Windows 安装包仍待实机验证。GitHub Releases 当前公开的 Windows 安装包为 v0.4.1。
 
-v0.5.2 本机应用已移除密码页，打开 `http://127.0.0.1:8765/` 即可查看仪表盘。已发布的 v0.4.1 Windows 安装包仍使用旧密码流程。
+v0.5.3 本机应用已移除密码页，打开 `http://127.0.0.1:8765/` 即可查看仪表盘。已发布的 v0.4.1 Windows 安装包仍使用旧密码流程。
 
-v0.5.2 仪表盘可按日期、Agent 与模型筛选 Token 用量，并通过两个按钮切换 Token／运行时间热力图；两个视图共用年／月／周／日导航。会话记录区可独立选一天或日期范围，并快速切换全部、Codex、Claude、Hermes；左侧搜索标题、对话内容和文件路径，右侧查看文字消息、原始日志位置及有证据的文件操作。时间同时显示各 Agent 运行区间相加的累计时长与并行去重后的自然经过时间。Codex 有完整任务事件时使用源记录时长；缺事件的 Codex、Claude 和 Hermes 仅能按消息推算，界面会标明估算。Hermes Token 仍只有会话／模型汇总，不能准确拆到每天。完整口径见[会话与时间说明](docs/project/SESSION_TIME_V0.5.md)。当前数字只来自运行应用的这台电脑，Mac 与 Windows 尚未同步；跨设备方案见[多 Agent 用量口径](docs/project/MULTI_AGENT_USAGE_V0.4.md)。价格、完整工具轨迹和跨设备管理尚未纳入此版本。文件记录仅覆盖可核实的工具操作及明确标出的待核实路径，不能保证找全所有产物；存储大小是原始记录的磁盘大小，并非会话 RAM。详情见[会话文件与搜索说明](docs/project/SESSION_INSPECTOR_V0.5.2.md)。
+v0.5.3 仪表盘可按日期、Agent 与模型筛选 Token 用量，并切换 Token／运行时间热力图。会话区按日期、Agent 和关键词查找记录；左栏显示记录大小或 Hermes 内容量并可打开来源目录，右栏显示用户提问轮次、用时、已确认文件数以及对话和文件历史。文件历史可打开文件所在的文件夹，不直接打开文件。对话可在“关键节点”和“完整详情”间切换；关键节点按原始顺序保留用户输入和每轮最后的 Agent 回复，不做语义摘要。时间同时显示累计时长与并行去重后的自然经过时间，部分来源用时为估算。Hermes Token 仍只有会话／模型汇总，不能准确拆到每天。当前数字只来自运行应用的这台电脑，Mac 与 Windows 尚未同步；跨设备方案见[多 Agent 用量口径](docs/project/MULTI_AGENT_USAGE_V0.4.md)。文件数只统计原始记录可确认的操作，大小不是进程 RAM；详情见[会话导航与文件口径](docs/project/SESSION_NAVIGATION_V0.5.3.md)和[会话与时间说明](docs/project/SESSION_TIME_V0.5.md)。
 
 ## Windows 安装与测试
 

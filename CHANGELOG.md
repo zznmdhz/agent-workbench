@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.3 — Session navigation and focused conversation view (2026-09-29)
+
+- Show each Codex/Claude source record's disk size or Hermes session payload estimate in the conversation list, with a direct folder action.
+- Open the containing folder for a source log, workspace, or recorded file without opening the file itself. Restrict the action to local desktop sessions and paths present in session evidence.
+- Add a focused conversation view that keeps user requests and the last completed Agent response per turn; retain the full message view.
+- Use spare detail-header space for user turn count, selected-range Agent time, and confirmed file count. Keep file counts limited to operations supported by source evidence.
+
 ## 0.5.2 — Session inspector and local search (unreleased)
 
 - Place the conversation list and selected session detail in side-by-side panes on desktop, with a list-to-detail flow on narrow screens.
