@@ -80,6 +80,10 @@ def test_session_browser_date_range_and_agent_switch(tmp_path: Path) -> None:
     daily = session_browser(db, '2026-09-28', '2026-09-28', 'UTC', **kwargs)
     assert daily['counts'] == {'codex': 1, 'claude': 0, 'hermes': 1}
     assert daily['session_count'] == 2
+    hermes_row = next(row for row in daily['sessions'] if row['agent'] == 'hermes')
+    assert hermes_row['storage_kind'] == 'payload'
+    assert hermes_row['storage_bytes'] == len('user bodyassistant body')
+    assert hermes_row['user_turns'] == 1
     whole = session_browser(db, '2026-09-27', '2026-09-28', 'UTC', **kwargs)
     assert whole['counts']['codex'] == 2 and whole['session_count'] == 3
     assert whole['sessions'][0]['agent'] == 'hermes'
@@ -162,6 +166,8 @@ def test_session_search_and_verified_codex_file_location(tmp_path: Path) -> None
     assert detail['unique_file_count'] == 1
     assert detail['file_events'][0]['native_path'] == str(output)
     assert detail['file_events'][0]['current_bytes'] == output.stat().st_size
+    assert by_body['sessions'][0]['storage_bytes'] == path.stat().st_size
+    assert by_body['sessions'][0]['can_open_folder'] is True
 
 
 def test_claude_write_requires_successful_tool_result(tmp_path: Path) -> None:

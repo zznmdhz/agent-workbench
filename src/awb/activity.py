@@ -430,10 +430,12 @@ def dashboard(db: Database, day: str, through: str, tz: str, *,
         key = (row['agent'], row['native_id'])
         item = grouped.setdefault(key, {'agent': key[0], 'native_id': key[1], 'title': '',
                                         'first_at': row['occurred_at'], 'last_at': row['occurred_at'],
-                                        'messages': 0, 'preview': ''})
+                                        'messages': 0, 'user_turns': 0, 'preview': ''})
         item['first_at'] = min(item['first_at'], row['occurred_at'])
         item['last_at'] = max(item['last_at'], row['occurred_at'])
         item['messages'] += 1
+        if row['role'] == 'user' and not _boilerplate(row['preview']):
+            item['user_turns'] += 1
         if row['role'] == 'user' and not item['preview'] and not _boilerplate(row['preview']):
             item['preview'] = row['preview']
     for run in focus_runs:
@@ -442,7 +444,7 @@ def dashboard(db: Database, day: str, through: str, tz: str, *,
         end_at = _iso(min(run['end'], focus_end).timestamp())
         item = grouped.setdefault(key, {'agent': key[0], 'native_id': key[1], 'title': '',
                                         'first_at': at, 'last_at': end_at,
-                                        'messages': 0, 'preview': ''})
+                                        'messages': 0, 'user_turns': 0, 'preview': ''})
         item['first_at'] = min(item['first_at'], at)
         item['last_at'] = max(item['last_at'], end_at)
     sessions = []
@@ -523,9 +525,54 @@ def session_browser(db: Database, day: str, through: str, tz: str, *,
         sessions = selected
     counts = {name: sum(row['agent'] == name for row in sessions)
               for name in ('codex', 'claude', 'hermes')}
+    visible = [row for row in sessions if agent in (None, row['agent'])]
+    source_paths: dict[tuple[str, str], set[str]] = defaultdict(set)
+    visible_keys = {(row['agent'], row['native_id']) for row in visible}
+    if visible_keys:
+        with db.read() as conn:
+            for row in conn.execute('''SELECT agent,native_id,source_file FROM mvp_activity_messages
+                UNION SELECT agent,native_id,source_file FROM mvp_activity_runs
+                UNION SELECT agent,native_id,source_file FROM mvp_activity_file_events'''):
+                key = (row['agent'], row['native_id'])
+                if key in visible_keys:
+                    source_paths[key].add(row['source_file'])
+    file_sizes: dict[str, int | None] = {}
+    for row in visible:
+        if row['agent'] == 'hermes':
+            row['storage_bytes'] = None
+            row['storage_kind'] = 'payload'
+            row['can_open_folder'] = (hermes_path or hermes_db_path()).parent.is_dir()
+            continue
+        paths = source_paths.get((row['agent'], row['native_id']), set())
+        for raw_path in paths:
+            if raw_path not in file_sizes:
+                try:
+                    file_sizes[raw_path] = Path(raw_path).stat().st_size
+                except OSError:
+                    file_sizes[raw_path] = None
+        sizes = [file_sizes[path] for path in paths]
+        row['storage_bytes'] = sum(size for size in sizes if size is not None) if sizes else None
+        row['storage_kind'] = 'record'
+        row['can_open_folder'] = any(Path(path).parent.is_dir() for path in paths)
+    hermes_ids = [row['native_id'] for row in visible if row['agent'] == 'hermes']
+    path = hermes_path or hermes_db_path()
+    if hermes_ids and path.is_file():
+        payload_sizes = {}
+        with closing(sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)) as conn:
+            fields = {field[1] for field in conn.execute('PRAGMA table_info(messages)')}
+            tool_size = "length(CAST(COALESCE(tool_calls,'') AS BLOB))" if 'tool_calls' in fields else '0'
+            for index in range(0, len(hermes_ids), 400):
+                group = hermes_ids[index:index + 400]
+                marks = ','.join('?' for _ in group)
+                payload_sizes.update(conn.execute(f'''SELECT session_id,
+                    COALESCE(SUM(length(CAST(COALESCE(content,'') AS BLOB))+{tool_size}),0)
+                    FROM messages WHERE session_id IN ({marks}) GROUP BY session_id''', group))
+        for row in visible:
+            if row['agent'] == 'hermes':
+                row['storage_bytes'] = payload_sizes.get(row['native_id'])
     return {'day': day, 'through': through, 'query': query, 'counts': counts,
             'session_count': len(sessions),
-            'sessions': [row for row in sessions if agent in (None, row['agent'])]}
+            'sessions': visible}
 
 
 def _source_cwd(path: Path, agent: str, native_id: str) -> str | None:
@@ -657,13 +704,36 @@ def session_inspector(db: Database, agent: str, native_id: str, *,
             'coverage': '成功工具操作记为已确认；嵌套补丁只提供待核实路径。Shell、外部程序与未留日志的操作不保证覆盖。'}
 
 
+def _key_messages(rows: list[dict], *, skip_boilerplate: bool = False) -> list[dict]:
+    """Keep the human request and the last completed answer in each turn."""
+    selected: list[dict] = []
+    last_answer = final_answer = None
+    for row in rows:
+        if row['role'] == 'user':
+            if skip_boilerplate and _boilerplate(row.get('preview') or ''):
+                continue
+            if final_answer or last_answer:
+                selected.append(final_answer or last_answer)
+            selected.append(row)
+            last_answer = final_answer = None
+        elif row['role'] == 'assistant':
+            last_answer = row
+            if row.get('final'):
+                final_answer = row
+    if final_answer or last_answer:
+        selected.append(final_answer or last_answer)
+    return selected
+
+
 def conversation(db: Database, agent: str, native_id: str, *, offset: int = 0,
                  limit: int = 100, day: str | None = None, through: str | None = None,
-                 tz: str = 'Asia/Hong_Kong',
+                 tz: str = 'Asia/Hong_Kong', view: str = 'full',
                  codex_root: Path | None = None,
                  claude_root: Path | None = None, hermes_path: Path | None = None) -> dict:
     if agent not in {'codex', 'claude', 'hermes'}:
         raise ValueError('Invalid agent')
+    if view not in {'full', 'key'}:
+        raise ValueError('Invalid conversation view')
     start = end = None
     if day:
         _, _, start, end, _ = _range(day, through or day, tz)
@@ -678,9 +748,27 @@ def conversation(db: Database, agent: str, native_id: str, *, offset: int = 0,
             if start and end:
                 condition += ' AND timestamp>=? AND timestamp<?'
                 params.extend((start.timestamp(), end.timestamp()))
-            count = conn.execute(f'SELECT count(*) FROM messages WHERE {condition}', params).fetchone()[0]
-            rows = [dict(r) for r in conn.execute('''SELECT id,role,content,timestamp FROM messages
-                WHERE ''' + condition + ' ORDER BY timestamp,id LIMIT ? OFFSET ?', (*params, limit, offset))]
+            if view == 'full':
+                count = conn.execute(f'SELECT count(*) FROM messages WHERE {condition}', params).fetchone()[0]
+                rows = [dict(r) for r in conn.execute('''SELECT id,role,content,timestamp FROM messages
+                    WHERE ''' + condition + ' ORDER BY timestamp,id LIMIT ? OFFSET ?', (*params, limit, offset))]
+            else:
+                metadata = [dict(r) for r in conn.execute('''SELECT id,role,timestamp,
+                    finish_reason,substr(content,1,160) AS preview FROM messages
+                    WHERE ''' + condition + ' ORDER BY timestamp,id', params)]
+                for row in metadata:
+                    row['final'] = row['finish_reason'] == 'stop'
+                key_rows = _key_messages(metadata)
+                count = len(key_rows)
+                page = key_rows[offset:offset + limit]
+                ids = [row['id'] for row in page]
+                if ids:
+                    marks = ','.join('?' for _ in ids)
+                    bodies = {row['id']: row['content'] for row in conn.execute(
+                        f'SELECT id,content FROM messages WHERE id IN ({marks})', ids)}
+                    rows = [{**row, 'content': bodies.get(row['id'])} for row in page]
+                else:
+                    rows = []
         return {'count': count, 'items': [{'id': str(r['id']), 'role': r['role'],
                 'occurred_at': _iso(r['timestamp']), 'body': r['content'] or ''} for r in rows]}
     with db.read() as conn:
@@ -698,6 +786,8 @@ def conversation(db: Database, agent: str, native_id: str, *, offset: int = 0,
         if previous is None or (row['final'], row['occurred_at']) >= (previous['final'], previous['occurred_at']):
             unique[key] = row
     rows = sorted(unique.values(), key=lambda x: (x['occurred_at'], x['source_offset']))
+    if view == 'key':
+        rows = _key_messages(rows, skip_boilerplate=agent == 'codex')
     items = []
     for row in rows[offset:offset + limit]:
         try:
