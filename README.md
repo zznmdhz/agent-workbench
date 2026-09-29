@@ -2,11 +2,13 @@
 
 各版本功能变化见 [更新日志](CHANGELOG.md)；已发布安装包与对应发布说明见 [GitHub Releases](https://github.com/zznmdhz/agent-workbench/releases)。开发测试版与已发布安装包的验证范围不同。
 
-本机多 Agent 用量与会话工作台。当前源码为 **v0.5.3 测试版**：只读扫描 Codex、Claude Code 原生会话日志，以及 Hermes 本机 `state.db`，不修改原始记录。代码同时支持 macOS 和 Windows；v0.5.3 在 Mac 上做基础验证，Windows 安装包仍待实机验证。GitHub Releases 当前公开的 Windows 安装包为 v0.4.1。
+本机多 Agent 用量与会话工作台。当前源码为 **v0.6.0 测试版**：在 macOS 和 Windows 上只读发现 Codex、Claude Code、Hermes 的原始记录，并将对话、Token、用时和文件索引归档进 Workbench 自己的 SQLite 底库。归档后的历史记录在 Agent 卸载或源记录消失后仍可查询。产出文件本身不备份。
 
-v0.5.3 本机应用已移除密码页，打开 `http://127.0.0.1:8765/` 即可查看仪表盘。已发布的 v0.4.1 Windows 安装包仍使用旧密码流程。
+两台电脑各自保有本地底库，通过现有 Sync_AI／Syncthing 文件夹交换设备专属数据包；页面可查看全部电脑汇总，也可只看 Mac 或 Windows。两端不直接共写一个 SQLite 数据库。Mac 默认查找 `~/Sync_AI`，Windows 默认查找 `B:\Sync_AI`；实际路径不同可在页面顶部修改。配置、口径和恢复方式见[底库与双机同步](docs/project/DURABLE_ARCHIVE_SYNC_V0.6.md)。本轮只在 Mac 做基础验证，Windows 实机同步和安装待回到 Windows 后验证。
 
-v0.5.3 仪表盘可按日期、Agent 与模型筛选 Token 用量，并切换 Token／运行时间热力图。会话区按日期、Agent 和关键词查找记录；左栏显示记录大小或 Hermes 内容量并可打开来源目录，右栏显示用户提问轮次、用时、已确认文件数以及对话和文件历史。文件历史可打开文件所在的文件夹，不直接打开文件。对话可在“关键节点”和“完整详情”间切换；关键节点按原始顺序保留用户输入和每轮最后的 Agent 回复，不做语义摘要。时间同时显示累计时长与并行去重后的自然经过时间，部分来源用时为估算。Hermes Token 仍只有会话／模型汇总，不能准确拆到每天。当前数字只来自运行应用的这台电脑，Mac 与 Windows 尚未同步；跨设备方案见[多 Agent 用量口径](docs/project/MULTI_AGENT_USAGE_V0.4.md)。文件数只统计原始记录可确认的操作，大小不是进程 RAM；详情见[会话导航与文件口径](docs/project/SESSION_NAVIGATION_V0.5.3.md)和[会话与时间说明](docs/project/SESSION_TIME_V0.5.md)。
+v0.6.0 延续 Token／运行时间热力图、按日期和 Agent 查会话、标题／正文／产出路径搜索、左右分栏、关键节点／完整详情、文件历史和打开所在文件夹。Hermes Token 仍只有会话／模型汇总，不能准确拆到每天。时间同时显示累计时长与并行去重后的自然经过时间，部分来源用时为估算。文件数只统计原始记录可确认的操作；详见[会话导航与文件口径](docs/project/SESSION_NAVIGATION_V0.5.3.md)和[会话与时间说明](docs/project/SESSION_TIME_V0.5.md)。本机页面地址为 `http://127.0.0.1:8765/`。
+
+GitHub Releases 当前公开的 Windows 安装包为 v0.4.1；它的界面和登录流程与 v0.6.0 源码不同。
 
 ## Windows 安装与测试
 

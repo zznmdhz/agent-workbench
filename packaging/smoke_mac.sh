@@ -10,9 +10,10 @@ fi
 
 scratch="$workspace/.local/mac-package-smoke"
 mkdir -p "$scratch"
+mkdir -p "$scratch/sync/.stfolder"
 port=8767
 CODEX_HOME="$scratch/empty-codex" CLAUDE_CONFIG_DIR="$scratch/empty-claude" \
-  HERMES_STATE_DB="$scratch/empty-hermes.db" \
+  HERMES_STATE_DB="$scratch/empty-hermes.db" AWB_SYNC_ROOT="$scratch/sync" \
   "$app" --db "$scratch/workbench.db" --port "$port" --no-browser &
 server_pid=$!
 trap 'kill "$server_pid" 2>/dev/null || true' EXIT INT TERM
@@ -42,7 +43,7 @@ ready = json.loads((root / "ready.json").read_text())
 usage = json.loads((root / "usage.json").read_text())
 activity = json.loads((root / "activity.json").read_text())
 index = (root / "index.html").read_text()
-assert ready["status"] == "ready" and ready["app_version"] == "0.5.3"
+assert ready["status"] == "ready" and ready["app_version"] == "0.6.0"
 assert "/assets/index-" in index
 assert usage["status"] == "ready" and len(usage["heatmap"]) == 24
 assert len(activity["heatmap"]) == 24 and activity["summary"]["agent_ms"] == 0

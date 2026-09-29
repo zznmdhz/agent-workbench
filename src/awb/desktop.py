@@ -103,6 +103,21 @@ def run_desktop(db_path: Path, port: int = 8765, browser: bool = True,
     service.state.shutdown_callback = lambda: setattr(server, "should_exit", True)
     stop = Event()
 
+    def archive_while_open() -> None:
+        from .archive import refresh
+        # Let the first page load trigger the initial scan. Continue discovery
+        # when the desktop app stays open without a browser tab.
+        if stop.wait(30):
+            return
+        while not stop.is_set():
+            try:
+                refresh(service.state.db)
+            except Exception as exc:
+                print(f"Archive scan failed: {exc}", file=sys.stderr)
+            stop.wait(300)
+
+    Thread(target=archive_while_open, name="awb-archive", daemon=True).start()
+
     if browser:
         def open_when_ready() -> None:
             for _ in range(100):

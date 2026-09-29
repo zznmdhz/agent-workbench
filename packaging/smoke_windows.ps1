@@ -2,6 +2,10 @@ $ErrorActionPreference = 'Stop'
 $workspace = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $exe = Join-Path $workspace '.local\package-build\AgentWorkbench\AgentWorkbench.exe'
 $db = Join-Path $workspace ('.local\multi-package-smoke-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.db')
+$sync = Join-Path $workspace '.local\windows-package-smoke-sync'
+New-Item -ItemType Directory -Force -Path (Join-Path $sync '.stfolder') | Out-Null
+$previousSyncRoot = $env:AWB_SYNC_ROOT
+$env:AWB_SYNC_ROOT = $sync
 $port = 8767
 if (-not (Test-Path -LiteralPath $exe)) { throw "Packaged executable missing: $exe" }
 if (-not $db.StartsWith($workspace + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
@@ -15,7 +19,7 @@ try {
         try { $ready = Invoke-RestMethod -Uri "$base/health/ready" -TimeoutSec 2; break }
         catch { Start-Sleep -Milliseconds 200 }
     }
-    if ($null -eq $ready -or $ready.app_version -ne '0.5.3') { throw 'Packaged app did not reach v0.5.3 ready state' }
+    if ($null -eq $ready -or $ready.app_version -ne '0.6.0') { throw 'Packaged app did not reach v0.6.0 ready state' }
     $homePage = Invoke-WebRequest -Uri "$base/" -TimeoutSec 10
     if ($homePage.StatusCode -ne 200 -or $homePage.Content -notmatch '(/assets/index-[^" ]+\.js)') {
         throw 'Packaged app did not serve the compiled dashboard'
@@ -49,7 +53,7 @@ try {
         throw 'Trend and unallocated Hermes totals do not reconcile'
     }
     foreach ($agent in @('codex', 'claude', 'hermes')) {
-        if ($usage.sources.$agent.status -ne 'ready' -or $usage.sources.$agent.total_tokens -le 0) {
+        if ($usage.sources.$agent.status -ne 'archived' -or $usage.sources.$agent.total_tokens -le 0) {
             throw "Expected local $agent usage is missing"
         }
     }
@@ -72,4 +76,5 @@ try {
     Invoke-RestMethod -Uri "$base/v1/local/shutdown" -Method Post -Headers @{ 'x-awb-csrf' = $csrf } | Out-Null
 } finally {
     if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+    $env:AWB_SYNC_ROOT = $previousSyncRoot
 }

@@ -7,18 +7,19 @@ type Totals={requests:number,input_tokens:number,fresh_input_tokens:number,cache
 type Source=Totals&{status:string,precision:'request'|'session_model_aggregate',earliest:string|null,latest:string|null,files:number,deferred:number,partial_rows?:number,updated_files?:number,missing_cache_read?:number,missing_cache_write?:number}
 type Trend=Totals&{period:string}
 type Model=Totals&{agent:Agent,model:string}
-type Session=Totals&{agent:Agent,native_id:string,title:string,last_request:string}
+type Session=Totals&{agent:Agent,native_id:string,device_id:string,title:string,last_request:string}
 type HeatView='year'|'month'|'week'|'day'|'custom'
 type Usage={status:string,summary:Totals,sources:Record<Agent,Source>,models:Model[],sessions:Session[],session_count:number,trend:Trend[],trend_granularity:'day'|'week'|'month',heatmap:Trend[],heatmap_view:HeatView,heatmap_granularity:'day'|'hour'|'month',unattributed_tokens:number,note:string}
 type Request=Totals&{request_id:string,occurred_at:string,first_seen?:string,model:string,precision:'request'|'session_model_aggregate'}
 type TimeCell={period:string,agent_ms:number,wall_ms:number,verified_ms:number,runs:number}
 type TimeTotals=Omit<TimeCell,'period'>
-type DaySession=TimeTotals&{agent:Agent,native_id:string,title:string,first_at:string,last_at:string,messages:number,user_turns:number,storage_bytes:number|null,storage_kind:'record'|'payload',can_open_folder:boolean,preview:string,match?:{type:string,excerpt:string}}
+type DaySession=TimeTotals&{agent:Agent,native_id:string,device_id:string,title:string,first_at:string,last_at:string,messages:number,user_turns:number,storage_bytes:number|null,storage_kind:'record'|'payload',can_open_folder:boolean,preview:string,match?:{type:string,excerpt:string}}
 type Activity={summary:TimeTotals,by_agent:Record<Agent,TimeTotals>,heatmap:TimeCell[],heatmap_granularity:'day'|'hour'|'month',focus_day:string,note:string,source:{updated_files?:number,read_errors?:number,hermes_ready:boolean}}
 type SessionBrowser={day:string,through:string,query:string,counts:Record<Agent,number>,session_count:number,sessions:DaySession[]}
 type Conversation={count:number,items:{id:string,role:string,occurred_at:string,body:string}[]}
 type SessionInspector={agent:Agent,native_id:string,cwd:string|null,sources:{path:string,bytes:number|null,status:string}[],record_bytes:number|null,payload_bytes:number|null,file_events:{occurred_at:string,native_path:string,relation:string,evidence:string,source_file:string,current_bytes:number|null,current_state:string}[],unique_file_count:number,possible_file_count:number,confirmed_event_count:number,coverage:string}
 type UpdateStatus={available:boolean,current_version:string,state:'idle'|'available'|'current'|'downloading'|'installing'|'error',latest_version:string|null,progress:number,error:string|null}
+type ArchiveStatus={local_device_id:string,sync_root:string|null,sync_ready:boolean,devices:{id:string,name:string,os:string,local:boolean,facts:number,last_imported:string|null}[]}
 type HeatHover={row:Trend|TimeCell,x:number,y:number,below:boolean,note:string}
 const names:Record<Agent,string>={codex:'Codex',claude:'Claude',hermes:'Hermes'}
 const fmt=(n:number)=>new Intl.NumberFormat('zh-CN').format(n)
@@ -29,7 +30,7 @@ const today=()=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:
 const yearStart=()=>`${today().slice(0,4)}-01-01`
 const when=(value:string|null)=>value?new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Hong_Kong',hour12:false}):'无记录'
 const dayOf=(value:string|null)=>value?new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Hong_Kong',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value)):'无记录'
-const sourceStatus=(row:Source)=>row.status==='source_missing'?'未发现本机来源':row.status==='read_error'?'读取失败':row.deferred>0?`${row.deferred} 项暂未计入`:'已读取'
+const sourceStatus=(row:Source)=>row.status==='source_missing'?'底库暂无记录':row.status==='read_error'?'读取失败':row.deferred>0?`${row.deferred} 项暂未计入`:row.status==='archived'?'已归档':'已读取'
 const lastDayOfMonth=(year:number,month:number)=>new Date(Date.UTC(year,month,0)).toISOString().slice(0,10)
 function periodBounds(view:Exclude<HeatView,'custom'>,anchor:string):[string,string]{
   if(view==='day')return [anchor,anchor]
@@ -56,6 +57,10 @@ function App(){
   const [error,setError]=useState('')
   const [stopped,setStopped]=useState(false)
   const [update,setUpdate]=useState<UpdateStatus|null>(null)
+  const [archiveStatus,setArchiveStatus]=useState<ArchiveStatus|null>(null)
+  const [deviceId,setDeviceId]=useState('')
+  const [syncRootInput,setSyncRootInput]=useState('')
+  const [syncMessage,setSyncMessage]=useState('')
   const [start,setStart]=useState(yearStart)
   const [end,setEnd]=useState(today)
   const [preset,setPreset]=useState('year')
@@ -97,6 +102,7 @@ function App(){
   useEffect(()=>{const timer=window.setTimeout(()=>setSessionQuery(sessionSearch.trim()),350);return()=>window.clearTimeout(timer)},[sessionSearch])
 
   useEffect(()=>{get<{csrf:string}>('/auth/me').then(x=>setCsrf(x.csrf)).catch(()=>setError('无法连接本机工作台，请重新打开页面'))},[])
+  useEffect(()=>{if(csrf)get<ArchiveStatus>('/v1/archive/status').then(x=>{setArchiveStatus(x);setSyncRootInput(x.sync_root||'')}).catch(e=>setError(`底库读取失败：${String(e)}`))},[csrf,tick])
   useEffect(()=>{
     if(!csrf)return
     let cancelled=false
@@ -128,18 +134,20 @@ function App(){
     const params=new URLSearchParams({day:start,through:end,tz:'Asia/Hong_Kong',heatmap_view:heatView})
     if(agent)params.set('agent',agent)
     if(model)params.set('model',model)
+    if(deviceId)params.set('device_id',deviceId)
     setLoading(true)
     setData(null)
     setHeatHover(null)
     get<Usage>(`/v1/mvp/usage?${params}`).then(x=>{if(!cancelled){setData(x);setError('');if(!model)setChoices(x.models.map(m=>m.model).filter((v,i,a)=>a.indexOf(v)===i).sort())}}).catch(e=>{if(!cancelled)setError(`用量读取失败：${String(e)}`)}).finally(()=>{if(!cancelled)setLoading(false)})
     return()=>{cancelled=true}
-  },[csrf,start,end,agent,model,heatView,tick,invalidRange])
+  },[csrf,start,end,agent,model,deviceId,heatView,tick,invalidRange])
   useEffect(()=>{
     if(!selected||invalidRange){setRequests(null);return}
     let cancelled=false
     setRequests(null)
     const params=new URLSearchParams({day:start,through:end,tz:'Asia/Hong_Kong',limit:'100'})
     if(model)params.set('model',model)
+    params.set('device_id',selected.device_id)
     get<{items:Request[],count:number}>(`/v1/mvp/usage/sessions/${selected.agent}/${encodeURIComponent(selected.native_id)}/requests?${params}`).then(x=>{if(!cancelled){setRequests(x.items);setRequestCount(x.count)}}).catch(()=>{if(!cancelled){setRequests([]);setRequestCount(0)}})
     return()=>{cancelled=true}
   },[selected,start,end,model,tick,invalidRange])
@@ -149,27 +157,30 @@ function App(){
     const chosen=focusDay>=start&&focusDay<=end?focusDay:start
     const params=new URLSearchParams({day:start,through:end,tz:'Asia/Hong_Kong',heatmap_view:heatView,focus_day:chosen})
     if(agent)params.set('agent',agent)
+    if(deviceId)params.set('device_id',deviceId)
     setActivityLoading(true)
     get<Activity>(`/v1/mvp/activity?${params}`).then(x=>{if(!cancelled){setActivity(x);setActivityError('')}}).catch(e=>{if(!cancelled)setActivityError(`会话读取失败：${String(e)}`)}).finally(()=>{if(!cancelled)setActivityLoading(false)})
     return()=>{cancelled=true}
-  },[csrf,start,end,heatView,focusDay,agent,tick,invalidRange])
+  },[csrf,start,end,heatView,focusDay,agent,deviceId,tick,invalidRange])
   useEffect(()=>{
     if(!csrf||invalidSessionRange)return
     let cancelled=false
     const params=new URLSearchParams({day:sessionStart,through:sessionEnd,tz:'Asia/Hong_Kong'})
     if(sessionAgent)params.set('agent',sessionAgent)
     if(sessionQuery)params.set('q',sessionQuery)
+    if(deviceId)params.set('device_id',deviceId)
     setSessionLoading(true)
     setSessionBrowser(null)
     setSessionError('')
     get<SessionBrowser>(`/v1/mvp/activity/sessions?${params}`).then(x=>{if(!cancelled){setSessionBrowser(x);setSessionError('')}}).catch(e=>{if(!cancelled)setSessionError(`会话读取失败：${String(e)}`)}).finally(()=>{if(!cancelled)setSessionLoading(false)})
     return()=>{cancelled=true}
-  },[csrf,sessionStart,sessionEnd,sessionAgent,sessionQuery,tick,invalidSessionRange])
+  },[csrf,sessionStart,sessionEnd,sessionAgent,sessionQuery,deviceId,tick,invalidSessionRange])
   useEffect(()=>{
     if(!daySession)return
     let cancelled=false
     setConversation(null)
     const params=new URLSearchParams({day:sessionStart,through:sessionEnd,tz:'Asia/Hong_Kong',view:conversationView,offset:String(conversationOffset),limit:'100'})
+    params.set('device_id',daySession.device_id)
     get<Conversation>(`/v1/mvp/activity/sessions/${daySession.agent}/${encodeURIComponent(daySession.native_id)}/conversation?${params}`).then(x=>{if(!cancelled)setConversation(x)}).catch(()=>{if(!cancelled)setConversation({items:[],count:0})})
     return()=>{cancelled=true}
   },[daySession,conversationOffset,conversationView,sessionStart,sessionEnd])
@@ -178,7 +189,7 @@ function App(){
     let cancelled=false
     setInspector(null)
     setInspectorError('')
-    get<SessionInspector>(`/v1/mvp/activity/sessions/${daySession.agent}/${encodeURIComponent(daySession.native_id)}/inspector`).then(x=>{if(!cancelled)setInspector(x)}).catch(e=>{if(!cancelled)setInspectorError(String(e))})
+    get<SessionInspector>(`/v1/mvp/activity/sessions/${daySession.agent}/${encodeURIComponent(daySession.native_id)}/inspector?device_id=${encodeURIComponent(daySession.device_id)}`).then(x=>{if(!cancelled)setInspector(x)}).catch(e=>{if(!cancelled)setInspectorError(String(e))})
     return()=>{cancelled=true}
   },[daySession,tick])
 
@@ -196,10 +207,10 @@ function App(){
   }
   function chooseSessionRange(days:number){setSessionStart(shift(today(),1-days));setSessionEnd(today());setDaySession(null)}
   function openSession(row:DaySession){setDaySession(row);setSessionTab('conversation');setConversationOffset(0);setFolderStatus('')}
-  async function openFolder(agent:Agent,nativeId:string,kind:'source'|'workspace'|'file',path?:string){
+  async function openFolder(agent:Agent,nativeId:string,sourceDevice:string,kind:'source'|'workspace'|'file',path?:string){
     setFolderStatus('正在打开所在文件夹…')
     try{
-      await post(`/v1/mvp/activity/sessions/${agent}/${encodeURIComponent(nativeId)}/reveal`,{kind,...(path?{path}:{})},csrf)
+      await post(`/v1/mvp/activity/sessions/${agent}/${encodeURIComponent(nativeId)}/reveal?device_id=${encodeURIComponent(sourceDevice)}`,{kind,...(path?{path}:{})},csrf)
       setFolderStatus('已打开所在文件夹')
     }catch(e){setFolderStatus(`无法打开所在文件夹：${String(e)}`)}
   }
@@ -207,6 +218,7 @@ function App(){
   function selectModel(value:Model){setAgent(value.agent);setModel(value.model);setSelected(null)}
   async function shutdown(){if(!window.confirm('关闭工作台？'))return;try{await post('/v1/local/shutdown',undefined,csrf);setStopped(true)}catch(e){setError(String(e))}}
   async function retryUpdate(){try{setUpdate(await post<UpdateStatus>('/v1/local/update',undefined,csrf))}catch(e){setUpdate(x=>x?{...x,error:String(e)}:x)}}
+  async function saveSyncRoot(){try{const x=await post<ArchiveStatus>('/v1/archive/sync-root',{path:syncRootInput},csrf);setArchiveStatus(x);setSyncMessage('同步目录已保存，已导入当前可用的数据包');setTick(v=>v+1)}catch(e){setSyncMessage(`同步目录保存失败：${String(e)}`)}}
 
   if(stopped)return <main className="mvpLogin"><div className="mvpLoginCard"><h1>工作台已关闭</h1><p>重新打开 Agent Workbench 即可继续使用。</p></div></main>
   if(!csrf)return <main className="mvpLogin"><div className="mvpLoginCard"><div className="mvpMark">✳</div><h1>Agent Workbench</h1><p>{error||'正在读取本机数据…'}</p>{error&&<button onClick={()=>window.location.reload()}>重试连接</button>}</div></main>
@@ -229,15 +241,16 @@ function App(){
     ['输出',fmt(summary.output_tokens),'模型生成的 Token'],
     ['有用量的会话',fmt(data!.session_count),'所选时段有 Token 记录，不代表正在运行'],
   ]:[]
-  return <div className="mvpShell"><header className="mvpHeader"><div className="mvpBrand"><span className="mvpMark">✳</span><span><b>Agent Workbench</b><small>多 Agent 用量 · v{update?.current_version||'0.5.3'}</small></span></div><div className="mvpHeaderActions"><button onClick={()=>setTick(x=>x+1)} disabled={loading}>{loading?'同步中…':'刷新'}</button><button onClick={shutdown}>关闭工作台</button></div></header><main className="mvpMain"><div className="mvpTitle"><div><p>USAGE / AGENTS</p><h1>用量仪表盘</h1><span>按原始记录核对 Token；不完整的历史范围会明确标示。</span></div><span className="mvpScope">当前电脑本地记录 · 未合并其他设备</span><div className="mvpAgentSwitch" role="group" aria-label="切换 Agent"><button aria-pressed={agent===''} onClick={()=>switchAgent('')}>全部</button>{(Object.keys(names) as Agent[]).map(name=><button key={name} aria-pressed={agent===name} onClick={()=>switchAgent(name)}><span className={`mvpAgentIcon ${name}`}>{name==='codex'?'C':name==='claude'?'✳':'H'}</span>{names[name]}</button>)}</div></div>
+  return <div className="mvpShell"><header className="mvpHeader"><div className="mvpBrand"><span className="mvpMark">✳</span><span><b>Agent Workbench</b><small>多 Agent 用量 · v{update?.current_version||'0.6.0'}</small></span></div><div className="mvpHeaderActions"><button onClick={()=>setTick(x=>x+1)} disabled={loading}>{loading?'同步中…':'刷新'}</button><button onClick={shutdown}>关闭工作台</button></div></header><main className="mvpMain"><div className="mvpTitle"><div><p>USAGE / AGENTS</p><h1>用量仪表盘</h1><span>对话、用量和文件索引已保存至 Workbench 底库。</span></div><span className="mvpScope">{deviceId?(archiveStatus?.devices.find(x=>x.id===deviceId)?.name||'所选电脑'):'全部电脑汇总'} · {archiveStatus?.sync_ready?'同步目录已连接':'同步目录未连接'}</span><div className="mvpAgentSwitch" role="group" aria-label="切换 Agent"><button aria-pressed={agent===''} onClick={()=>switchAgent('')}>全部</button>{(Object.keys(names) as Agent[]).map(name=><button key={name} aria-pressed={agent===name} onClick={()=>switchAgent(name)}><span className={`mvpAgentIcon ${name}`}>{name==='codex'?'C':name==='claude'?'✳':'H'}</span>{names[name]}</button>)}</div></div>
+    <section className="mvpFilters" aria-label="电脑来源"><label>电脑 <select value={deviceId} onChange={e=>{setDeviceId(e.target.value);setSelected(null);setDaySession(null)}}><option value="">全部电脑（去重汇总）</option>{archiveStatus?.devices.map(row=><option key={row.id} value={row.id}>{row.name} · {row.os}{row.local?'（本机）':''}</option>)}</select></label><label>NAS 同步文件夹 <input type="text" value={syncRootInput} onChange={e=>setSyncRootInput(e.target.value)} placeholder="选择已同步的 Sync_AI 路径"/></label><button onClick={()=>void saveSyncRoot()} disabled={!syncRootInput.trim()}>保存目录</button><span>{archiveStatus?.sync_ready?'已连接':'未连接'} · 文件本身不备份</span>{syncMessage&&<span role="status">{syncMessage}</span>}</section>
     {update?.available&&update.state==='downloading'&&<div className="mvpUpdate" role="status">检测到 v{update.latest_version}，正在自动下载并校验安装包：{update.progress}%</div>}
     {update?.available&&update.state==='installing'&&<div className="mvpUpdate" role="status">安装包已校验，正在自动关闭旧版、安装并重新打开工作台。请稍候…</div>}
     {update?.available&&update.state==='error'&&<div className="mvpError" role="alert">自动更新暂时失败：{update.error}。当前版本仍可使用。{update.latest_version&&<button onClick={retryUpdate}>重试更新</button>}</div>}
     <section className="mvpFilters" aria-label="用量筛选"><div className="mvpRange" role="group" aria-label="快捷日期范围">{[1,7,15].map(n=><button key={n} aria-pressed={preset===String(n)} onClick={()=>chooseRange(n)}>{n===1?'今天':`近 ${n} 天`}</button>)}<button aria-pressed={preset==='year'} onClick={chooseYear}>今年至今</button><button aria-pressed={preset==='all'} onClick={allHistory}>全部历史</button></div><label>开始日期 <input type="date" value={start} onChange={e=>{setStart(e.target.value);setPreset('custom');setHeatView('custom');setSelected(null)}}/></label><label>结束日期 <input type="date" value={end} onChange={e=>{setEnd(e.target.value);setPreset('custom');setHeatView('custom');setSelected(null)}}/></label><label>模型 <select value={model} onChange={e=>{setModel(e.target.value);setSelected(null)}}><option value="">全部模型</option>{choices.map(x=><option key={x} value={x}>{x}</option>)}</select></label></section>
     {invalidRange&&<div className="mvpError" role="alert">开始日期不能晚于结束日期。</div>}{error&&<div className="mvpError" role="alert">{error}</div>}
-    {data&&<p className="mvpProvenance">查询：{start} 至 {end}，香港时间。{data.note} 原生记录未提供的缓存字段无法补算，显示的总量可能偏低；费用尚未计价。{loading?' 正在同步本机日志…':''}</p>}
+    {data&&<p className="mvpProvenance">查询：{start} 至 {end}，香港时间。{data.note} 原生记录未提供的缓存字段无法补算，显示的总量可能偏低；费用尚未计价。{loading?' 正在同步底库…':''}</p>}
     <section className="mvpCards" aria-label="核心指标">{cards.map(([label,value,note])=><article className="mvpCard" key={label}><small>{label}</small><strong>{value}</strong><span>{note}</span></article>)}</section>
-    {data&&<section className="mvpPanel"><div className="mvpPanelHead"><h2>数据来源与覆盖</h2><span>点击来源可只看该 Agent</span></div><div className="mvpSourceGrid">{(Object.keys(names) as Agent[]).map(name=>{const source=data.sources[name];return <button className="mvpSource" key={name} onClick={()=>{setAgent(name);setModel('');setSelected(null)}} aria-pressed={agent===name}><b>{names[name]}</b><strong>{fmt(source.total_tokens)} Token</strong><span>{fmt(source.requests)} {name==='hermes'?'调用（会话汇总）':'请求'} · {sourceStatus(source)}</span><small>本机记录：{dayOf(source.earliest)} 至 {dayOf(source.latest)}</small>{name==='claude'&&!!((source.missing_cache_read||0)+(source.missing_cache_write||0))&&<small>原始记录缺缓存读字段 {fmt(source.missing_cache_read||0)} 条、缺缓存写字段 {fmt(source.missing_cache_write||0)} 条；对应总量可能偏低</small>}{name==='hermes'&&<small>只能按完整会话汇总计入；跨越筛选边界 {fmt(source.partial_rows||0)} 项未计入</small>}</button>})}</div></section>}
+    {data&&<section className="mvpPanel"><div className="mvpPanelHead"><h2>数据来源与覆盖</h2><span>点击来源可只看该 Agent</span></div><div className="mvpSourceGrid">{(Object.keys(names) as Agent[]).map(name=>{const source=data.sources[name];return <button className="mvpSource" key={name} onClick={()=>{setAgent(name);setModel('');setSelected(null)}} aria-pressed={agent===name}><b>{names[name]}</b><strong>{fmt(source.total_tokens)} Token</strong><span>{fmt(source.requests)} {name==='hermes'?'调用（会话汇总）':'请求'} · {sourceStatus(source)}</span><small>底库记录：{dayOf(source.earliest)} 至 {dayOf(source.latest)}</small>{name==='claude'&&!!((source.missing_cache_read||0)+(source.missing_cache_write||0))&&<small>原始记录缺缓存读字段 {fmt(source.missing_cache_read||0)} 条、缺缓存写字段 {fmt(source.missing_cache_write||0)} 条；对应总量可能偏低</small>}{name==='hermes'&&<small>只能按完整会话汇总计入；跨越筛选边界 {fmt(source.partial_rows||0)} 项未计入</small>}</button>})}</div></section>}
     <section className="mvpPanel mvpHeatPanel">
       <div className="mvpPanelHead"><div><h2>{heatMetric==='token'?'Token 活动热力图':'运行时间热力图'}</h2><p>{heatMetric==='token'?'Codex / Claude 按这台电脑的请求时间统计；悬停或聚焦格子查看用量。':'每格颜色按并行去重后的经过时间；悬停可比较累计 Agent 时长。Claude / Hermes 为估算。'}</p></div><div className="mvpHeatControls"><div className="mvpHeatViews" role="group" aria-label="热力图指标"><button aria-pressed={heatMetric==='token'} onClick={()=>{setHeatMetric('token');setHeatHover(null)}}>Token 用量</button><button aria-pressed={heatMetric==='time'} onClick={()=>{setHeatMetric('time');setHeatHover(null)}}>运行时间</button></div><div className="mvpHeatViews" role="group" aria-label="热力图时间粒度">{(['year','month','week','day'] as const).map(view=><button key={view} aria-pressed={heatView===view} onClick={()=>selectHeatView(view)}>{({year:'年',month:'月',week:'周',day:'日'} as const)[view]}</button>)}</div></div></div>
       <div className="mvpHeatPeriod"><button onClick={()=>heatView!=='custom'&&selectHeatView(heatView,movePeriod(heatView,start,-1))} disabled={heatView==='custom'} aria-label="上一时段">‹</button><strong>{periodLabel(heatView,start,end)}</strong><button onClick={()=>heatView!=='custom'&&selectHeatView(heatView,movePeriod(heatView,start,1))} disabled={heatView==='custom'} aria-label="下一时段">›</button><button onClick={()=>selectHeatView(heatView==='custom'?'year':heatView,today())}>回到当前</button></div>
@@ -279,8 +292,8 @@ function App(){
       <div className={`mvpSessionWorkspace${daySession?' hasSelection':''}`}>
         <div className="mvpSessionList" aria-label="会话列表">
           {sessionLoading&&<p className="mvpEmpty">正在读取所选时段的会话…</p>}
-          {sessionBrowser?.sessions.map(row=><div className="mvpSessionItem" key={`${row.agent}:${row.native_id}`} data-selected={daySession?.agent===row.agent&&daySession.native_id===row.native_id}>
-            <div className="mvpSessionItemTop"><button className="mvpSessionName" onClick={()=>openSession(row)} aria-pressed={daySession?.agent===row.agent&&daySession.native_id===row.native_id}>{names[row.agent]} · {row.title}</button><div className="mvpSessionItemActions"><span title={row.storage_kind==='payload'?'消息与工具字段大小；非数据库占用':'原始记录磁盘大小'}>{row.storage_kind==='payload'?'内容约':'记录'} {row.storage_bytes===null?'未知':bytes(row.storage_bytes)}</span><button type="button" disabled={!row.can_open_folder} onClick={()=>void openFolder(row.agent,row.native_id,'source')} title="打开原始会话记录所在文件夹">打开目录</button></div></div>
+          {sessionBrowser?.sessions.map(row=><div className="mvpSessionItem" key={`${row.device_id}:${row.agent}:${row.native_id}`} data-selected={daySession?.device_id===row.device_id&&daySession?.agent===row.agent&&daySession.native_id===row.native_id}>
+            <div className="mvpSessionItemTop"><button className="mvpSessionName" onClick={()=>openSession(row)} aria-pressed={daySession?.agent===row.agent&&daySession.native_id===row.native_id}>{names[row.agent]} · {row.title}</button><div className="mvpSessionItemActions"><span title={row.storage_kind==='payload'?'消息与工具字段大小；非数据库占用':'原始记录磁盘大小'}>{row.storage_kind==='payload'?'内容约':'记录'} {row.storage_bytes===null?'未知':bytes(row.storage_bytes)}</span><button type="button" disabled={!row.can_open_folder} onClick={()=>void openFolder(row.agent,row.native_id,row.device_id,'source')} title="打开原始会话记录所在文件夹">打开目录</button></div></div>
             <button className="mvpSessionBody" onClick={()=>openSession(row)}><small>{when(row.last_at)} · {fmt(row.messages)} 条消息 · Agent {duration(row.agent_ms)}</small><span>{row.match?`${row.match.type}：${row.match.excerpt}`:row.preview||'点击查看会话详情'}</span></button>
           </div>)}
           {sessionBrowser&&!sessionBrowser.sessions.length&&<p className="mvpEmpty">没有匹配的会话。可扩大日期范围或换个关键词。</p>}
@@ -294,16 +307,16 @@ function App(){
               {inspectorError&&<p className="mvpError">文件信息读取失败：{inspectorError}</p>}{!inspector&&!inspectorError&&<p className="mvpEmpty">正在读取来源与文件记录…</p>}
               {inspector&&<><div className="mvpFileSummary"><div><small>原始记录磁盘大小</small><strong>{bytes(inspector.record_bytes)}</strong><span>{daySession.agent==='hermes'?'Hermes 使用共享数据库，不能按会话分摊文件大小':`${inspector.sources.length} 个原始记录文件；不是运行时 RAM`}</span></div><div><small>已确认涉及的文件</small><strong>{fmt(inspector.unique_file_count)}</strong><span>{fmt(inspector.confirmed_event_count)} 次确认操作 · {fmt(inspector.possible_file_count)} 条待核实路径</span></div></div>
                 {daySession.agent==='hermes'&&inspector.payload_bytes!==null&&<p className="mvpFileNote">本会话消息与工具字段约 {bytes(inspector.payload_bytes)}；这不是数据库占用量，也不是 RAM。</p>}
-                <h4>来源位置</h4><div className="mvpPathRows"><div><span>工作目录</span><code>{inspector.cwd||'原始记录未提供'}</code>{inspector.cwd&&<button onClick={()=>void openFolder(daySession.agent,daySession.native_id,'workspace')}>打开目录</button>}</div>{inspector.sources.map(row=><div key={row.path}><span>{row.status==='shared_database'?'共享数据库':'会话原始记录'}</span><code>{row.path}</code><small>{row.bytes===null?'大小未能单独计算':bytes(row.bytes)}</small><button onClick={()=>void openFolder(daySession.agent,daySession.native_id,'source',row.path)}>打开目录</button></div>)}</div>
+                <h4>来源位置</h4><div className="mvpPathRows"><div><span>工作目录</span><code>{inspector.cwd||'原始记录未提供'}</code>{inspector.cwd&&<button disabled={daySession.device_id!==archiveStatus?.local_device_id} onClick={()=>void openFolder(daySession.agent,daySession.native_id,daySession.device_id,'workspace')}>打开目录</button>}</div>{inspector.sources.map(row=><div key={row.path}><span>{row.status==='shared_database'?'共享数据库':'会话原始记录'}</span><code>{row.path}</code><small>{row.bytes===null?'大小未能单独计算':bytes(row.bytes)}</small><button disabled={daySession.device_id!==archiveStatus?.local_device_id} onClick={()=>void openFolder(daySession.agent,daySession.native_id,daySession.device_id,'source',row.path)}>打开目录</button></div>)}</div>
                 <h4>文件操作历史</h4><p className="mvpFileNote">{inspector.coverage} 当前文件状态仅是打开详情时的本机检查。</p>
-                {inspector.file_events.length?<div className="mvpFileEvents">{inspector.file_events.map((event,index)=><article key={`${event.source_file}:${event.native_path}:${index}`}><div><b>{event.relation==='referenced'?'待核实路径':event.relation==='created'?'创建':event.relation==='deleted'?'删除':event.relation==='created/modified'?'写入':'修改'}</b><small>{when(event.occurred_at)} · {event.evidence}</small></div><code>{event.native_path}</code><small>当前：{event.current_state==='present'?`存在 · ${bytes(event.current_bytes)}`:event.current_state==='missing'?'未找到':'无法检查'}</small><button onClick={()=>void openFolder(daySession.agent,daySession.native_id,'file',event.native_path)}>打开所在文件夹</button></article>)}</div>:<p className="mvpEmpty">尚未取得文件操作线索；不能据此判定会话没有产出文件。</p>}
+                {inspector.file_events.length?<div className="mvpFileEvents">{inspector.file_events.map((event,index)=><article key={`${event.source_file}:${event.native_path}:${index}`}><div><b>{event.relation==='referenced'?'待核实路径':event.relation==='created'?'创建':event.relation==='deleted'?'删除':event.relation==='created/modified'?'写入':'修改'}</b><small>{when(event.occurred_at)} · {event.evidence}</small></div><code>{event.native_path}</code><small>当前：{event.current_state==='present'?`存在 · ${bytes(event.current_bytes)}`:event.current_state==='missing'?'未找到':'无法检查'}</small><button disabled={daySession.device_id!==archiveStatus?.local_device_id} onClick={()=>void openFolder(daySession.agent,daySession.native_id,daySession.device_id,'file',event.native_path)}>打开所在文件夹</button></article>)}</div>:<p className="mvpEmpty">尚未取得文件操作线索；不能据此判定会话没有产出文件。</p>}
               </>}
             </div>}
           </>}
         </div>
       </div>
     </section>
-    <div className="mvpTwo"><section className="mvpPanel"><div className="mvpPanelHead"><h2>模型用量</h2><span>点击行筛选模型</span></div><div className="mvpTableWrap"><table><thead><tr><th>Agent</th><th>模型</th><th>请求／调用</th><th>新输入</th><th>缓存读</th><th>缓存写</th><th>输出</th><th>处理总量</th></tr></thead><tbody>{data?.models.map(row=><tr key={`${row.agent}:${row.model}`}><td>{names[row.agent]}</td><td><button className="mvpModelButton" onClick={()=>selectModel(row)} aria-label={`筛选 ${names[row.agent]} 的 ${row.model}`}>{row.model}</button></td><td>{fmt(row.requests)}</td><td>{fmt(row.fresh_input_tokens)}</td><td>{fmt(row.cached_input_tokens)}</td><td>{fmt(row.cache_creation_tokens)}</td><td>{fmt(row.output_tokens)}</td><td>{fmt(row.total_tokens)}</td></tr>)}</tbody></table></div>{!data?.models.length&&<p className="mvpEmpty">所选范围没有可核对的用量记录</p>}</section><section className="mvpPanel"><div className="mvpPanelHead"><div><h2>所选时段会话</h2><p>筛选日期内有用量记录的会话，并非正在运行的对话。</p></div><span>共 {fmt(data?.session_count||0)} 条{(data?.session_count||0)>(data?.sessions.length||0)?` · 显示最近 ${data?.sessions.length}`:''}</span></div><div className="mvpSessions">{data?.sessions.map(row=><button key={`${row.agent}:${row.native_id}`} onClick={()=>setSelected(row)} aria-pressed={selected?.native_id===row.native_id&&selected.agent===row.agent}><b title={row.title}>{names[row.agent]} · {row.title}</b><small>{when(row.last_request)} · {fmt(row.requests)} {row.agent==='hermes'?'调用':'请求'} · {fmt(row.total_tokens)} Token</small></button>)}</div>{!data?.sessions.length&&<p className="mvpEmpty">所选时段没有可关联的会话</p>}</section></div>
+    <div className="mvpTwo"><section className="mvpPanel"><div className="mvpPanelHead"><h2>模型用量</h2><span>点击行筛选模型</span></div><div className="mvpTableWrap"><table><thead><tr><th>Agent</th><th>模型</th><th>请求／调用</th><th>新输入</th><th>缓存读</th><th>缓存写</th><th>输出</th><th>处理总量</th></tr></thead><tbody>{data?.models.map(row=><tr key={`${row.agent}:${row.model}`}><td>{names[row.agent]}</td><td><button className="mvpModelButton" onClick={()=>selectModel(row)} aria-label={`筛选 ${names[row.agent]} 的 ${row.model}`}>{row.model}</button></td><td>{fmt(row.requests)}</td><td>{fmt(row.fresh_input_tokens)}</td><td>{fmt(row.cached_input_tokens)}</td><td>{fmt(row.cache_creation_tokens)}</td><td>{fmt(row.output_tokens)}</td><td>{fmt(row.total_tokens)}</td></tr>)}</tbody></table></div>{!data?.models.length&&<p className="mvpEmpty">所选范围没有可核对的用量记录</p>}</section><section className="mvpPanel"><div className="mvpPanelHead"><div><h2>所选时段会话</h2><p>筛选日期内有用量记录的会话，并非正在运行的对话。</p></div><span>共 {fmt(data?.session_count||0)} 条{(data?.session_count||0)>(data?.sessions.length||0)?` · 显示最近 ${data?.sessions.length}`:''}</span></div><div className="mvpSessions">{data?.sessions.map(row=><button key={`${row.device_id}:${row.agent}:${row.native_id}`} onClick={()=>setSelected(row)} aria-pressed={selected?.device_id===row.device_id&&selected?.native_id===row.native_id&&selected.agent===row.agent}><b title={row.title}>{names[row.agent]} · {row.title}</b><small>{when(row.last_request)} · {fmt(row.requests)} {row.agent==='hermes'?'调用':'请求'} · {fmt(row.total_tokens)} Token</small></button>)}</div>{!data?.sessions.length&&<p className="mvpEmpty">所选时段没有可关联的会话</p>}</section></div>
     {selected&&<section className="mvpPanel"><div className="mvpPanelHead"><div><h2>{names[selected.agent]} · {selected.title}</h2><p>{selected.agent==='hermes'?'以下是会话／模型汇总，不是逐请求记录，也无法拆分到某一天。':`共 ${requestCount} 条请求；显示最近 100 条。`}</p></div><button onClick={()=>setSelected(null)}>关闭</button></div><div className="mvpTableWrap"><table><thead><tr><th>{selected.agent==='hermes'?'末次使用':'时间'}</th><th>模型</th><th>新输入</th><th>缓存读</th><th>缓存写</th><th>输出</th><th>总量</th></tr></thead><tbody>{requests?.map(row=><tr key={row.request_id}><td>{when(row.occurred_at)}</td><td>{row.model}</td><td>{fmt(row.fresh_input_tokens)}</td><td>{fmt(row.cached_input_tokens)}</td><td>{fmt(row.cache_creation_tokens)}</td><td>{fmt(row.output_tokens)}</td><td>{fmt(row.total_tokens)}</td></tr>)}</tbody></table></div>{requests===null&&<p className="mvpEmpty">正在加载用量记录…</p>}</section>}
     <p className="mvpFoot">本机记录包含 Token 用量与会话时间；跨设备数据仍需在各设备采集后同步。源日志不存在的时段不会被补造。</p></main></div>
 }

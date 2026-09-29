@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0 — Durable archive and two-computer exchange (2026-09-29)
+
+- Persist discovered Codex, Claude and Hermes conversation text, Token observations, run intervals, source locations and file-operation indexes in Workbench-owned SQLite facts. Historical records remain readable after native Agent logs are removed, once they have been discovered.
+- Exchange immutable, device-owned packets through a Syncthing `Sync_AI` folder. Each computer keeps its own local SQLite replica; neither computer opens or writes the other's database over NAS.
+- Add All/Mac/Windows computer filtering across usage, time, session search and details. All view deduplicates copied native records by Agent, native ID and fact ID.
+- Keep produced files as path-only indexes. Folder actions operate only on the original computer when the folder still exists.
+- Add a sync-folder field and archive status on the dashboard. Initial Mac backfill and isolated two-device exchange received basic checks; Windows package and NAS behavior still require Windows device testing.
+
 ## 0.5.3 — Session navigation and focused conversation view (2026-09-29)
 
 - Show each Codex/Claude source record's disk size or Hermes session payload estimate in the conversation list, with a direct folder action.

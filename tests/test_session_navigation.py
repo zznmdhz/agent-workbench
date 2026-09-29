@@ -89,7 +89,7 @@ def test_reveal_endpoint_checks_csrf_and_session_evidence(tmp_path: Path, monkey
     folder.mkdir()
     output = folder / 'article.md'
     output.touch()
-    monkeypatch.setattr('awb.api.mvp_session_inspector', lambda *_args: {
+    monkeypatch.setattr('awb.api.archive_views.inspector', lambda *_args, **_kwargs: {
         'cwd': str(tmp_path), 'sources': [], 'file_events': [{'native_path': str(output)}]})
     opened = []
     monkeypatch.setattr('awb.api.open_folder', opened.append)
