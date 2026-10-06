@@ -4,12 +4,19 @@ type State={version:string,pid:number,collector_state:string,last_success:string
   error:string|null,paused:boolean,tray_visible:boolean,autostart:boolean,scan_interval_seconds:number,
   scan_count:number,build:{commit:string,built_at:string|null}}
 
+export function statusIcon(color:'green'|'amber'|'red'){
+  const fill={green:'#208879',amber:'#e39a30',red:'#cb4242'}[color]
+  // A disconnected server cannot serve a red SVG; keep it in the loaded page.
+  return 'data:image/svg+xml,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="${fill}"/><path d="M16 6v20M6 16h20M9 9l14 14M9 23L23 9" stroke="white" stroke-width="2"/></svg>`)
+}
+
 export default function BackgroundStatus({csrf,onRefresh,onReconnect}:{csrf:string,onRefresh:()=>void,onReconnect:()=>void}){
   const [state,setState]=useState<State|null>(null)
   const [online,setOnline]=useState(true)
   const [message,setMessage]=useState('')
   const lastCount=useRef(-1)
   const lastPid=useRef(0)
+  const lastVersion=useRef('')
   useEffect(()=>{
     let cancelled=false
     async function poll(){
@@ -18,6 +25,8 @@ export default function BackgroundStatus({csrf,onRefresh,onReconnect}:{csrf:stri
         if(!response.ok)throw new Error('status unavailable')
         const next=await response.json() as State
         if(cancelled)return
+        if(lastVersion.current&&lastVersion.current!==next.version){window.location.reload();return}
+        lastVersion.current=next.version
         setState(next);setOnline(true)
         if(lastPid.current&&lastPid.current!==next.pid)onReconnect()
         if(lastCount.current>=0&&lastCount.current!==next.scan_count)onRefresh()
@@ -33,7 +42,7 @@ export default function BackgroundStatus({csrf,onRefresh,onReconnect}:{csrf:stri
     state.collector_state==='scanning'?'后台运行 · 正在采集':state.error?'后台运行 · 采集异常':stale?'后台运行 · 数据更新延迟':'后台运行中'
   useEffect(()=>{
     const icon=document.querySelector<HTMLLinkElement>('link[rel="icon"]')
-    if(icon)icon.href=`/status-${color}.svg`
+    if(icon)icon.href=statusIcon(color)
     document.title=`${online?'●':'○'} ${label} · Agent Workbench`
   },[color,label,online])
   async function action(name:string){

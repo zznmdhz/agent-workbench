@@ -1,7 +1,7 @@
 import {useEffect, useState} from 'react'
 import {createRoot} from 'react-dom/client'
 import './mvp.css'
-import BackgroundStatus from './BackgroundStatus'
+import BackgroundStatus, {statusIcon} from './BackgroundStatus'
 import {ModelReport, type ModelReportData, type ReportModel} from './ModelReport'
 
 type Agent='codex'|'claude'|'hermes'
@@ -249,7 +249,7 @@ function App(){
   }
   function switchAgent(value:Agent|''){setAgent(value);setModel('')}
   function selectModel(value:ReportModel){setAgent(value.agent);setModel(value.model)}
-  async function shutdown(){if(!window.confirm('退出后台会停止采集，关闭浏览器则不会。确定退出后台吗？'))return;try{await post('/v1/local/shutdown',undefined,csrf);document.title='○ 后台已退出 · Agent Workbench';const icon=document.querySelector<HTMLLinkElement>('link[rel="icon"]');if(icon)icon.href='/status-red.svg';setStopped(true)}catch(e){setError(String(e))}}
+  async function shutdown(){if(!window.confirm('退出后台会停止采集，关闭浏览器则不会。确定退出后台吗？'))return;try{await post('/v1/local/shutdown',undefined,csrf);document.title='○ 后台已退出 · Agent Workbench';const icon=document.querySelector<HTMLLinkElement>('link[rel="icon"]');if(icon)icon.href=statusIcon('red');setStopped(true)}catch(e){setError(String(e))}}
   async function retryUpdate(){try{setUpdate(await post<UpdateStatus>('/v1/local/update',undefined,csrf))}catch(e){setUpdate(x=>x?{...x,error:String(e)}:x)}}
   async function saveSyncRoot(){try{const x=await post<ArchiveStatus>('/v1/archive/sync-root',{path:syncRootInput},csrf);setArchiveStatus(x);setSyncMessage('同步目录已保存，后台将导入可用的数据包');setTick(v=>v+1)}catch(e){setSyncMessage(`同步目录保存失败：${String(e)}`)}}
   async function refreshNow(){

@@ -1164,7 +1164,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
 
         @app.get("/")
         def index():
-            return FileResponse(web_dist / "index.html")
+            return FileResponse(web_dist / "index.html", headers={'Cache-Control': 'no-store'})
 
     return app
 
