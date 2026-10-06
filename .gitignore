@@ -25,3 +25,5 @@ build/
 *.log
 *.zip
 .DS_Store
+*sync-conflict*
+src/awb/build.json

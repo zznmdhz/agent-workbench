@@ -1,6 +1,9 @@
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
 from awb import archive, archive_views
+from awb.api import create_app
 from awb.db import Database
 
 
@@ -92,6 +95,73 @@ def test_model_report_keeps_hermes_off_dated_charts(tmp_path: Path):
     assert report['models'][0]['cache_hit_rate'] == 0.4
     assert all(row['agent'] != 'hermes' for row in report['series'] + report['hours'])
     assert len(report['points']) == 1
+
+
+def test_model_report_monthly_series_matches_periods(tmp_path: Path):
+    db = Database(tmp_path / 'monthly-report.db')
+    db.initialize()
+    device = archive.initialize(db)
+    with db.tx() as conn:
+        archive._upsert_local(conn, device, 'usage', 'codex', 'c1', 'r1',
+                              '2026-09-28T10:00:00Z', {'request_id': 'r1', 'model': 'sol',
+                              'input_tokens': 100, 'cached_input_tokens': 40,
+                              'output_tokens': 20, 'occurred_at': '2026-09-28T10:00:00Z'})
+    report = archive_views.model_report(db, '2026-01-01', '2026-09-29', 'UTC')
+    assert report['grain'] == 'month'
+    assert report['series'][0]['period'] == '2026-09-01'
+    assert report['series'][0]['period'] in report['periods']
+    assert report['series'][0]['total_tokens'] == 120
+
+
+def test_usage_monthly_trend_matches_periods(tmp_path: Path):
+    db = Database(tmp_path / 'monthly-usage.db')
+    db.initialize()
+    device = archive.initialize(db)
+    with db.tx() as conn:
+        archive._upsert_local(conn, device, 'usage', 'codex', 'c1', 'r1',
+                              '2026-09-28T10:00:00Z', {'request_id': 'r1', 'model': 'sol',
+                              'input_tokens': 100, 'cached_input_tokens': 40,
+                              'output_tokens': 20, 'occurred_at': '2026-09-28T10:00:00Z'})
+    result = archive_views.usage(db, '2026-01-01', '2026-09-29', 'UTC')
+    assert result['trend_granularity'] == 'month'
+    assert next(row for row in result['trend'] if row['period'] == '2026-09-01')['total_tokens'] == 120
+
+
+def test_existing_archive_reads_without_rescanning_native_files(tmp_path: Path, monkeypatch):
+    path = tmp_path / 'existing.db'
+    db = Database(path)
+    db.initialize()
+    device = archive.initialize(db)
+    with db.tx() as conn:
+        archive._upsert_local(conn, device, 'message', 'codex', 'c1', 'm1',
+                              '2026-09-29T10:00:00Z', {'message_id': 'm1', 'role': 'user',
+                              'body': 'hello', 'preview': 'hello', 'final': 1})
+    def forbidden_scan(*_args, **_kwargs):
+        raise AssertionError('A read endpoint must not rescan native files')
+    monkeypatch.setattr(archive, 'refresh', forbidden_scan)
+    client = TestClient(create_app(path, desktop_mode=True),
+                        base_url='http://127.0.0.1:8765', client=('127.0.0.1', 50000))
+    assert client.get('/v1/archive/status').status_code == 200
+    response = client.get('/v1/mvp/activity/sessions',
+                          params={'day': '2026-09-29', 'tz': 'UTC'})
+    assert response.status_code == 200
+    assert response.json()['session_count'] == 1
+
+
+def test_activity_time_window_keeps_cross_midnight_estimate(tmp_path: Path):
+    db = Database(tmp_path / 'window.db')
+    db.initialize()
+    device = archive.initialize(db)
+    with db.tx() as conn:
+        for fact, at, role in [('m1', '2026-09-28T23:59:00Z', 'user'),
+                               ('m2', '2026-09-29T00:01:00Z', 'assistant')]:
+            archive._upsert_local(conn, device, 'message', 'claude', 'c1', fact, at,
+                                  {'message_id': fact, 'role': role, 'body': fact,
+                                   'preview': fact, 'final': 1})
+    result = archive_views.activity(db, '2026-09-29', '2026-09-29', 'UTC',
+                                    heatmap_view='day')
+    assert result['summary']['wall_ms'] == 60_000
+    assert len(result['sessions']) == 1
 
 
 def test_session_browser_advanced_filters(tmp_path: Path):

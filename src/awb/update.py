@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
+import shutil
+import sqlite3
 import subprocess
 import sys
+import time
 from pathlib import Path
 from threading import Lock, Thread
 
@@ -34,7 +38,7 @@ def select_release(releases: list[dict], current: str) -> dict | None:
     for release in releases:
         tag = release.get("tag_name", "")
         number = _version(tag)
-        if release.get("draft") or number is None or number <= current_number:
+        if release.get("draft") or release.get('prerelease') or number is None or number <= current_number:
             continue
         name = f"AgentWorkbench-Setup-{'.'.join(map(str, number))}-Windows-x64.exe"
         for asset in release.get("assets", []):
@@ -52,7 +56,7 @@ def select_release(releases: list[dict], current: str) -> dict | None:
     return max(candidates, default=((), None), key=lambda item: item[0])[1]
 
 
-UPDATER_SCRIPT = r"""param([string]$Installer, [string]$TargetExe, [int]$ParentPid, [string]$LogPath, [string]$FailurePath)
+UPDATER_SCRIPT = r"""param([string]$Installer, [string]$TargetExe, [int]$ParentPid, [string]$LogPath, [string]$FailurePath, [string]$Rollback, [string]$DbPath, [string]$Maintenance, [string]$ExpectedVersion)
 $ErrorActionPreference = 'Stop'
 try {
     for ($i = 0; $i -lt 120; $i++) {
@@ -65,14 +69,37 @@ try {
     $process = Start-Process -FilePath $Installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', '/FORCECLOSEAPPLICATIONS', '/NORESTARTAPPLICATIONS') -Wait -PassThru -WindowStyle Hidden
     if ($process.ExitCode -ne 0) { throw "Installer exited with code $($process.ExitCode)." }
     if (-not (Test-Path -LiteralPath $TargetExe)) { throw 'Installed executable is missing.' }
-    Start-Process -FilePath $TargetExe -WorkingDirectory (Split-Path -Parent $TargetExe) -WindowStyle Hidden
+    Remove-Item -LiteralPath $Maintenance -Force -ErrorAction SilentlyContinue
+    Start-Process -FilePath $TargetExe -ArgumentList '--no-browser' -WorkingDirectory (Split-Path -Parent $TargetExe) -WindowStyle Hidden
+    $healthy = $false
+    for ($j = 0; $j -lt 90; $j++) {
+        try {
+            $ready = Invoke-RestMethod 'http://127.0.0.1:8765/health/ready' -TimeoutSec 2
+            if ($ready.app_version -eq $ExpectedVersion) { $healthy = $true; break }
+        } catch {}
+        Start-Sleep -Seconds 1
+    }
+    if (-not $healthy) { throw 'Updated background did not become healthy.' }
     Remove-Item -LiteralPath $FailurePath -Force -ErrorAction SilentlyContinue
     "Update succeeded at $(Get-Date -Format o)" | Set-Content -LiteralPath $LogPath -Encoding UTF8
 } catch {
     "Update failed at $(Get-Date -Format o): $_" | Set-Content -LiteralPath $LogPath -Encoding UTF8
     "$_" | Set-Content -LiteralPath $FailurePath -Encoding UTF8
+    if ($Rollback -and (Test-Path -LiteralPath (Join-Path $Rollback 'program'))) {
+        # Close only processes belonging to this exact installation before restoration.
+        $targetDirectory = [IO.Path]::GetFullPath((Split-Path -Parent $TargetExe))
+        Get-Process -Name AgentWorkbench -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $TargetExe } | Stop-Process -Force
+        Copy-Item -Path (Join-Path $Rollback 'program\*') -Destination $targetDirectory -Recurse -Force
+        if ($DbPath -and (Test-Path -LiteralPath (Join-Path $Rollback 'database.db'))) {
+            foreach ($suffix in @('-wal', '-shm')) {
+                Remove-Item -LiteralPath ($DbPath + $suffix) -Force -ErrorAction SilentlyContinue
+            }
+            Copy-Item -LiteralPath (Join-Path $Rollback 'database.db') -Destination $DbPath -Force
+        }
+    }
+    Remove-Item -LiteralPath $Maintenance -Force -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $TargetExe) {
-        Start-Process -FilePath $TargetExe -WorkingDirectory (Split-Path -Parent $TargetExe) -WindowStyle Hidden
+        Start-Process -FilePath $TargetExe -ArgumentList '--no-browser' -WorkingDirectory (Split-Path -Parent $TargetExe) -WindowStyle Hidden
     }
     exit 1
 }
@@ -80,7 +107,8 @@ try {
 
 
 class UpdateManager:
-    def __init__(self, executable: Path | None = None, data_root: Path | None = None):
+    def __init__(self, executable: Path | None = None, data_root: Path | None = None,
+                 db_path: Path | None = None):
         self.executable = (executable or Path(sys.executable)).resolve()
         app_data = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
         self.data_root = (data_root or app_data / "AgentWorkbench" / "updates").resolve()
@@ -92,6 +120,18 @@ class UpdateManager:
         self._state = "idle"
         self._error: str | None = None
         self._progress = 0
+        self.db_path = db_path
+
+    def backup(self) -> Path | None:
+        if not self.executable.is_file():
+            return None  # Isolated tests do not have an installed application.
+        destination = self.data_root / f'rollback-{__version__}-{time.time_ns()}'
+        shutil.copytree(self.executable.parent, destination/'program')
+        if self.db_path and self.db_path.is_file():
+            with sqlite3.connect(self.db_path.resolve().as_uri()+'?mode=ro', uri=True) as source:
+                with sqlite3.connect(destination/'database.db') as target:
+                    source.backup(target)
+        return destination
 
     def status(self) -> dict:
         with self._lock:
@@ -175,6 +215,10 @@ class UpdateManager:
             finally:
                 temporary.unlink(missing_ok=True)
             script = self.data_root / "run-update.ps1"
+            rollback = self.backup()
+            maintenance = self.data_root / 'maintenance.json'
+            maintenance.write_text(json.dumps({'started_at': time.time(), 'parent_pid': os.getpid()}),
+                                   encoding='utf-8')
             script.write_text(UPDATER_SCRIPT, encoding="utf-8-sig")
             log = self.data_root / "last-update.log"
             failure = self.data_root / f"failed-{release['version']}.txt"
@@ -182,7 +226,9 @@ class UpdateManager:
                               "-WindowStyle", "Hidden", "-File", str(script),
                               "-Installer", str(destination), "-TargetExe", str(self.executable),
                               "-ParentPid", str(os.getpid()), "-LogPath", str(log),
-                              "-FailurePath", str(failure)],
+                              "-FailurePath", str(failure), '-Rollback', str(rollback or ''),
+                              '-DbPath', str(self.db_path or ''), '-Maintenance', str(maintenance),
+                              '-ExpectedVersion', release['version']],
                             creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0)
                                            | getattr(subprocess, "DETACHED_PROCESS", 0)),
                              close_fds=True)
@@ -190,7 +236,8 @@ class UpdateManager:
                 self._state = "installing"
                 self._progress = 100
             shutdown_callback()
-        except (OSError, ValueError, httpx.HTTPError) as exc:
+        except (OSError, ValueError, sqlite3.Error, httpx.HTTPError) as exc:
+            (self.data_root/'maintenance.json').unlink(missing_ok=True)
             with self._lock:
                 self._state = "error"
                 self._error = f"自动更新失败：{exc}"

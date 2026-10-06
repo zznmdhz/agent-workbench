@@ -36,6 +36,6 @@ jobs:
         with:
           name: agent-workbench-windows
           path: |
-            dist/AgentWorkbench-Setup-0.7.0-Windows-x64.exe
-            dist/AgentWorkbench-Windows-portable-0.7.0.zip
+            dist/AgentWorkbench-Setup-*-Windows-x64.exe
+            dist/AgentWorkbench-Windows-portable-*.zip
           if-no-files-found: error

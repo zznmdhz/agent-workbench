@@ -1,4 +1,6 @@
-#define AppVersion "0.7.0"
+#ifndef AppVersion
+#define AppVersion "0.8.0"
+#endif
 
 [Setup]
 AppId={{AB1AF47D-451C-4C53-8F6D-25016B11DE06}
@@ -55,4 +57,8 @@ Name: "{autodesktop}\Agent Workbench"; Filename: "{app}\AgentWorkbench.exe"; Wor
 Name: desktopicon; Description: "创建桌面快捷方式"; GroupDescription: "其他选项："; Flags: unchecked
 
 [Run]
+Filename: "{app}\AgentWorkbench.exe"; Parameters: "--register-background"; Flags: runhidden waituntilterminated
 Filename: "{app}\AgentWorkbench.exe"; Description: "启动 Agent Workbench"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+Filename: "{app}\AgentWorkbench.exe"; Parameters: "--unregister-background"; Flags: runhidden waituntilterminated

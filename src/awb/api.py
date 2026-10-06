@@ -222,7 +222,11 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     app.state.desktop_mode = desktop_mode
     app.state.local_csrf = secrets.token_urlsafe(24)
     app.state.shutdown_callback = None
-    app.state.updater = UpdateManager()
+    app.state.updater = UpdateManager(db_path=path)
+    archive.initialize(db)
+    from .background import Background
+    app.state.background = Background(db)
+    app.state.restart_callback = None
 
     def owner_exists() -> bool:
         with db.read() as conn:
@@ -257,7 +261,28 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     def ready():
         with db.read() as conn:
             version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
-        return {"status": "ready", "schema_version": version, "app_version": __version__}
+        from .build_info import info
+        return {"status": "ready", "schema_version": version, "app_version": __version__,
+                "build": info()}
+
+    @app.get('/v1/local/background')
+    def background_status(request: Request, _: str = Depends(require_owner)):
+        require_local_desktop(request)
+        return app.state.background.snapshot()
+
+    @app.post('/v1/local/background/{action}')
+    def background_control(action: str, request: Request, _: None = Depends(require_owner_write)):
+        require_local_desktop(request)
+        if action == 'pause':
+            return app.state.background.pause(True)
+        if action == 'resume':
+            return app.state.background.pause(False)
+        if action == 'refresh':
+            return app.state.background.request()
+        if action == 'restart' and app.state.restart_callback:
+            app.state.restart_callback()
+            return {'restarting': True}
+        raise HTTPException(422, 'Unknown or unavailable background action')
 
     @app.post("/auth/login")
     def auth_login(body: Credentials, request: Request, response: Response):
@@ -510,7 +535,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
                   heatmap_view: str = "year", device_id: str | None = None,
                   _: str = Depends(require_owner)):
         try:
-            archive.refresh(db)
+            archive.refresh_if_empty(db)
             return archive_views.usage(db, day, through or day, tz, agent=agent, model=model,
                                        heatmap_view=heatmap_view, device_id=device_id)
         except (ValueError, KeyError) as exc:
@@ -521,7 +546,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
                          agent: str | None = None, model: str | None = None,
                          device_id: str | None = None, _: str = Depends(require_owner)):
         try:
-            archive.refresh(db)
+            archive.refresh_if_empty(db)
             return archive_views.model_report(db, day, through or day, tz,
                 agent=agent, model=model, device_id=device_id)
         except (ValueError, KeyError) as exc:
@@ -533,7 +558,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
                                    limit: int = Query(100, ge=1, le=200), device_id: str | None = None,
                                    _: str = Depends(require_owner)):
         try:
-            archive.refresh(db)
+            archive.refresh_if_empty(db)
             return archive_views.requests(db, agent, native_id, day, through or day, tz,
                                           model=model, limit=limit, device_id=device_id)
         except (ValueError, KeyError) as exc:
@@ -545,7 +570,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
                      agent: str | None = None, device_id: str | None = None,
                      _: str = Depends(require_owner)):
         try:
-            archive.refresh(db)
+            archive.refresh_if_empty(db)
             return archive_views.activity(db, day, through or day, tz,
                                           heatmap_view=heatmap_view, focus_day=focus_day,
                                           agent=agent, device_id=device_id)
@@ -560,7 +585,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
                                   offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
                                   _: str = Depends(require_owner)):
         try:
-            archive.refresh(db)
+            archive.refresh_if_empty(db)
             return archive_views.conversation(db, agent, native_id,
                 device_id=device_id or archive.local_device_id(db), offset=offset, limit=limit,
                 day=day, through=through, tz=tz, view=view)
@@ -578,7 +603,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
                               limit: int = Query(300, ge=1, le=1000),
                               _: str = Depends(require_owner)):
         try:
-            archive.refresh(db)
+            archive.refresh_if_empty(db)
             return archive_views.browser(db, day, through or day, tz, agent=agent,
                 query=q, device_id=device_id, search_in=search_in, sort=sort,
                 min_text=min_text, min_duration=min_duration,
@@ -591,7 +616,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
                                        device_id: str | None = None,
                                        _: str = Depends(require_owner)):
         try:
-            archive.refresh(db)
+            archive.refresh_if_empty(db)
             return archive_views.inspector(db, agent, native_id,
                 device_id=device_id or archive.local_device_id(db))
         except ValueError as exc:
@@ -620,7 +645,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
 
     @app.get('/v1/archive/status')
     def archive_status(_: str = Depends(require_owner)):
-        archive.refresh(db)
+        archive.refresh_if_empty(db)
         return archive.status(db)
 
     @app.post('/v1/archive/sync-root')
@@ -629,6 +654,9 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
         require_local_desktop(request)
         try:
             archive.set_sync_root(db, body.path)
+            if app.state.background.thread:
+                app.state.background.request()
+                return archive.status(db)
             return archive.refresh(db, force=True)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
@@ -636,6 +664,9 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     @app.post('/v1/archive/refresh')
     def archive_force_refresh(request: Request, _: None = Depends(require_owner_write)):
         require_local_desktop(request)
+        if app.state.background.thread:
+            app.state.background.request()
+            return {'queued': True, 'background': app.state.background.snapshot()}
         return archive.refresh(db, force=True)
 
     @app.get("/v1/timeline")

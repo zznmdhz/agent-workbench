@@ -27,6 +27,11 @@ MAX_ESTIMATE_SECONDS = 6 * 3600
 ACTIVITY_PARSER_VERSION = '3'
 
 
+def trusted_run(row: dict) -> bool:
+    """Synthetic imports preserve history, not evidence of continuous execution."""
+    return not str(row.get('run_id', '')).startswith(('external-import-', 'imported-', 'synthetic-'))
+
+
 def _iso(value: object) -> str | None:
     try:
         if isinstance(value, (int, float)):
@@ -122,6 +127,9 @@ def _scan_codex(path: Path) -> tuple[list[tuple], list[tuple], list[tuple]]:
                     if start:
                         starts[run_id] = start
                 elif event == 'task_complete' and run_id in starts:
+                    if not trusted_run({'run_id': run_id}):
+                        starts.pop(run_id, None)
+                        continue
                     start = _iso(payload.get('started_at')) or starts.get(run_id)
                     end = _iso(payload.get('completed_at')) or at
                     duration_ms = payload.get('duration_ms')
@@ -351,7 +359,7 @@ def _bucket_bounds(key: str, grain: str, zone: ZoneInfo) -> tuple[datetime, date
         start = datetime.fromisoformat(key + ':00:00').replace(tzinfo=zone)
         return start.astimezone(timezone.utc), (start + timedelta(hours=1)).astimezone(timezone.utc)
     if grain == 'month':
-        year, month = map(int, key.split('-'))
+        year, month = map(int, key.split('-')[:2])
         start = datetime(year, month, 1, tzinfo=zone)
         end = datetime(year + (month == 12), month % 12 + 1, 1, tzinfo=zone)
         return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
@@ -394,7 +402,7 @@ def dashboard(db: Database, day: str, through: str, tz: str, *,
     messages = list(unique.values())
     intervals = [{'agent': 'codex', 'native_id': row['native_id'],
                   'start': _dt(row['start_at']), 'end': _dt(row['end_at']), 'precision': 'verified'}
-                 for row in runs if row['end_at'] > row['start_at']]
+                 for row in runs if trusted_run(row) and row['end_at'] > row['start_at']]
     verified_sessions = {r['native_id'] for r in intervals}
     intervals.extend(_estimated([r for r in messages if r['agent'] == 'codex'
                                  and r['native_id'] not in verified_sessions], 'codex'))

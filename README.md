@@ -1,30 +1,36 @@
 # Agent Workbench
 
-各版本功能变化见 [更新日志](CHANGELOG.md)；已发布安装包与对应发布说明见 [GitHub Releases](https://github.com/zznmdhz/agent-workbench/releases)。开发测试版与已发布安装包的验证范围不同。
+本机多 Agent 用量与会话工作台，当前版本 **v0.8.0**。只读发现 Codex、Claude Code、Hermes 的原始记录，将 Token、对话、用时和文件操作索引归档到自己的 SQLite 底库。无需 Electron，网页直接在浏览器中使用，Windows 本机访问无需密码。
 
-本机多 Agent 用量与会话工作台。当前源码为 **v0.7.0 测试版**：在 macOS 和 Windows 上只读发现 Codex、Claude Code、Hermes 的原始记录，并将对话、Token、用时和文件索引归档进 Workbench 自己的 SQLite 底库。归档后的历史记录在 Agent 卸载或源记录消失后仍可查询。产出文件本身不备份。
+## Windows 安装与日常使用
 
-两台电脑各自保有本地底库，通过现有 Sync_AI／Syncthing 文件夹交换设备专属数据包；页面可查看全部电脑汇总，也可只看 Mac 或 Windows。两端不直接共写一个 SQLite 数据库。Mac 默认查找 `~/Sync_AI`，Windows 默认查找 `B:\Sync_AI`；实际路径不同可在页面顶部修改。配置、口径和恢复方式见[底库与双机同步](docs/project/DURABLE_ARCHIVE_SYNC_V0.6.md)。本轮只在 Mac 做基础验证，Windows 实机同步和安装待回到 Windows 后验证。
+从 [v0.8.0 发布页](https://github.com/zznmdhz/agent-workbench/releases/tag/v0.8.0) 下载 `AgentWorkbench-Setup-0.8.0-Windows-x64.exe`，安装后从开始菜单打开 **Agent Workbench**。页面地址是 `http://127.0.0.1:8765/`。已有用户升级保留底库，首次回填可能需要等待。
 
-v0.7.0 延续 Token／运行时间热力图、按日期和 Agent 查会话、标题／正文／产出路径搜索、左右分栏、关键节点／完整详情、文件历史和打开所在文件夹。Hermes Token 仍只有会话／模型汇总，不能准确拆到每天。时间同时显示累计时长与并行去重后的自然经过时间，部分来源用时为估算。文件数只统计原始记录可确认的操作；详见[会话导航与文件口径](docs/project/SESSION_NAVIGATION_V0.5.3.md)和[会话与时间说明](docs/project/SESSION_TIME_V0.5.md)。新增多图模型分析、缓存率和请求频率视图；会话可按文字量、用时、记录大小、消息及文件数排序，并按标题／内容／文件路径高级检索。图表和筛选口径见[模型分析与会话检索](docs/project/MODEL_REPORT_AND_SESSION_FILTERS_V0.7.md)。本机页面地址为 `http://127.0.0.1:8765/`。
+后台随 Windows 登录启动；关闭浏览器仍继续采集。右下角通知区有常驻图标，Windows 可能把它放入“显示隐藏图标”。图标菜单支持打开、刷新、暂停、恢复、重启、日志和退出。浏览器标签页及页面状态条也显示运行／采集／离线状态和最近采集时间，可固定标签页方便访问。异常进程退出由当前用户的系统计划任务尝试恢复；正常退出则下次登录自动启动。
 
-GitHub Releases 当前公开的 Windows 安装包为 v0.4.1；它的界面和登录流程与 v0.7.0 源码不同。
+Windows 安装版在后台检查稳定版本并校验下载，更新前备份程序和底库，失败尝试回滚。便携 ZIP 使用自己的 `data/`，不注册登录任务、不自动替换程序，不与安装版共用端口。完整行为与限制见[后台运行及更新说明](docs/project/LOCAL_BACKGROUND_V0.8.md)，操作检查见[Windows 测试说明](docs/MVP_WINDOWS_TEST.md)。软件尚未做 Windows 代码签名。
 
-## Windows 安装与测试
+## 数据与功能
 
-从 [Releases](https://github.com/zznmdhz/agent-workbench/releases) 下载 `AgentWorkbench-Setup-0.4.1-Windows-x64.exe`，双击安装，从开始菜单打开 **Agent Workbench**。浏览器会自动打开本机页面，首次在网页创建至少 12 位密码。普通用户无需命令行。v0.4.1 起，安装版登录后会自动检查 GitHub 发布、下载并校验新安装包，然后关闭旧进程、静默安装并重新打开。安装器也会先通知运行中的工作台退出，再处理占用文件。v0.4.0 及更早版本尚无内置更新器，需要这一次手动安装 v0.4.1。详细步骤及验收清单见 [Windows 测试说明](docs/MVP_WINDOWS_TEST.md)。便携 ZIP 保持手动替换，不与安装版同时开启。
+- Token 的新输入、缓存读取、缓存写入、输出可逐项对账；年／月／周／日热力图和自选起止日期查询；Agent 快速切换、模型比较、趋势、缓存率和请求频率。
+- 会话按日期／Agent／设备浏览，原生标题、关键节点及完整详情；标题／正文／文件路径搜索和多种排序。
+- 文件操作历史及来源记录大小，支持定位本机仍存在的文件夹；文件实体不备份，单个会话的进程内存无法从日志推算。
+- 可信任务边界与消息估算用时分开；导入合成的跨日任务不作为已证实运行时段。并行时长分别给出累计执行与去重后的自然经过时间。
+- Hermes 只有会话／模型聚合 Token，不能可靠拆到日／小时；独立显示未分配量。未被源日志记录或归档的历史不能恢复，不能把空格子视为一定没使用。
 
-## macOS 应用测试
+归档后的历史在 Agent 卸载或源记录消失后仍可查询。两个设备各有自己的底库，通过同步文件夹交换设备专属数据包，不共写 SQLite。Windows 默认发现 `B:\Sync_AI`，Mac 默认 `~/Sync_AI`，页面可调整路径；见[底库与双机同步](docs/project/DURABLE_ARCHIVE_SYNC_V0.6.md)。开发源码应通过 Git 同步，依赖、构建目录和 `.git` 排除 Syncthing。
 
-在 Mac 上运行 `bash packaging/build_mac.sh` 可生成 `dist/mac/AgentWorkbench.app`。双击应用会在后台启动本机服务并打开浏览器；关闭时在页面点击“关闭工作台”。首次读取历史日志可能需要一些时间，尤其是大体积 Codex 会话。应用默认读取 `~/.codex`、`~/.claude` 和 `~/.hermes/state.db`，数据保存在 `~/Library/Application Support/AgentWorkbench/data/`。详细操作见 [Mac 测试说明](docs/MAC_TEST.md)。当前 Mac 应用是本机构建的未公证测试版，尚未发布为 GitHub 安装包。
+## macOS
 
-如需隔离数据库的源码预览，在 Mac 上完成下方依赖安装和构建后运行：
+在 Mac 上运行 `bash packaging/build_mac.sh` 可构建 `.app`。源码包含用户 LaunchAgent 的登录启动与异常恢复配置，但本次没有发布公证的 Mac 安装包，也没有完成 Mac 实机恢复及双机验收；不要将 Windows 发布结果视为 Mac 验收。当前通知区图标实现针对 Windows。
+
+隔离源码预览（完成依赖安装及前端构建后）：
 
 ```bash
-uv run python packaging/desktop_entrypoint.py --db .local/mac-review/usage.db --no-browser
+uv run python packaging/desktop_entrypoint.py --db .local/review/usage.db --port 8767 --no-browser --no-tray
 ```
 
-打开 `http://127.0.0.1:8765/`。如 Hermes 安装位置不同，可在启动前设置 `HERMES_STATE_DB`。上述预览使用 `.local/` 中的独立数据库；Mac 测试版尚无自动更新。
+打开 `http://127.0.0.1:8767/`，自定义数据库／端口不会注册安装版登录任务。Agent 路径可用 `CODEX_HOME`、`CLAUDE_CONFIG_DIR`、`HERMES_STATE_DB` 调整。私有底库和原始正文不能上传至项目仓库。
 
 ## 数据来源与对账
 

@@ -10,6 +10,10 @@ foreach ($target in @($portable, $portableStage, $work, $spec)) {
     }
 }
 Set-Location -LiteralPath $workspace
+$version = ((Get-Content -LiteralPath 'pyproject.toml' | Select-String '^version = "([^"]+)"$' | Select-Object -First 1).Matches.Groups[1].Value)
+$commit = git rev-parse HEAD
+$buildMetadata = @{ commit = $commit; built_at = [DateTime]::UtcNow.ToString('o'); version = $version } | ConvertTo-Json
+[IO.File]::WriteAllText((Join-Path $workspace 'src\awb\build.json'), $buildMetadata, [Text.UTF8Encoding]::new($false))
 pnpm --dir web install --frozen-lockfile
 if ($LASTEXITCODE -ne 0) { throw 'pnpm install failed' }
 pnpm --dir web build
@@ -17,12 +21,12 @@ if ($LASTEXITCODE -ne 0) { throw 'web build failed' }
 uv sync --frozen --group build
 if ($LASTEXITCODE -ne 0) { throw 'uv sync failed' }
 uv run --frozen --group build pyinstaller --noconfirm --onedir --contents-directory _internal `
-    --windowed --name AgentWorkbench --hidden-import awb.cli --add-data "$workspace\web\dist:web/dist" `
+    --windowed --name AgentWorkbench --hidden-import awb.cli --hidden-import pystray._win32 --add-data "$workspace\web\dist:web/dist" --add-data "$workspace\src\awb\build.json:awb" `
     --distpath (Join-Path $workspace '.local\package-build') `
     --workpath $work --specpath $spec packaging/desktop_entrypoint.py
 if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed' }
 uv run --frozen --group build pyinstaller --noconfirm --onedir --contents-directory _internal `
-    --console --name AgentWorkbenchCLI --add-data "$workspace\web\dist:web/dist" `
+    --console --name AgentWorkbenchCLI --add-data "$workspace\web\dist:web/dist" --add-data "$workspace\src\awb\build.json:awb" `
     --distpath (Join-Path $workspace '.local\package-build-cli') `
     --workpath (Join-Path $workspace '.local\pyinstaller-cli-work') `
     --specpath $spec packaging/entrypoint.py
@@ -38,7 +42,7 @@ New-Item -ItemType File -Path (Join-Path $portableStage 'portable.flag') -Force 
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README-PORTABLE.md') -Destination $portableStage
 Copy-Item -LiteralPath (Join-Path $workspace 'LICENSE') -Destination $portableStage
 Copy-Item -LiteralPath (Join-Path $workspace 'docs\third_party\CC_SWITCH_LICENSE.txt') -Destination (Join-Path $portableStage 'THIRD-PARTY-CC-SWITCH-LICENSE.txt')
-$archive = Join-Path $workspace 'dist\AgentWorkbench-Windows-portable-0.7.0.zip'
+$archive = Join-Path $workspace "dist\AgentWorkbench-Windows-portable-$version.zip"
 New-Item -ItemType Directory -Force -Path (Split-Path $archive) | Out-Null
 Compress-Archive -LiteralPath $portableStage -DestinationPath $archive -CompressionLevel Optimal -Force
 Get-FileHash -Algorithm SHA256 -LiteralPath $archive | Select-Object Path, Hash
@@ -47,6 +51,6 @@ if (-not (Test-Path -LiteralPath $compiler)) {
     $compiler = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
 }
 if (-not (Test-Path -LiteralPath $compiler)) { throw 'Inno Setup 6 compiler not found' }
-& $compiler (Join-Path $PSScriptRoot 'AgentWorkbench.iss')
+& $compiler "/DAppVersion=$version" (Join-Path $PSScriptRoot 'AgentWorkbench.iss')
 if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
-Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $workspace 'dist\AgentWorkbench-Setup-0.7.0-Windows-x64.exe') | Select-Object Path, Hash
+Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $workspace "dist\AgentWorkbench-Setup-$version-Windows-x64.exe") | Select-Object Path, Hash

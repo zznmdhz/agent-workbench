@@ -11,7 +11,7 @@ if (-not (Test-Path -LiteralPath $exe)) { throw "Packaged executable missing: $e
 if (-not $db.StartsWith($workspace + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
     throw 'Smoke database escaped workspace'
 }
-$process = Start-Process -FilePath $exe -ArgumentList @('--db', $db, '--port', "$port", '--no-browser') -PassThru -WindowStyle Hidden
+$process = Start-Process -FilePath $exe -ArgumentList @('--db', $db, '--port', "$port", '--no-browser', '--no-tray') -PassThru -WindowStyle Hidden
 try {
     $base = "http://127.0.0.1:$port"
     $ready = $null
@@ -19,7 +19,7 @@ try {
         try { $ready = Invoke-RestMethod -Uri "$base/health/ready" -TimeoutSec 2; break }
         catch { Start-Sleep -Milliseconds 200 }
     }
-    if ($null -eq $ready -or $ready.app_version -ne '0.7.0') { throw 'Packaged app did not reach v0.7.0 ready state' }
+    if ($null -eq $ready -or $ready.app_version -ne '0.8.0') { throw 'Packaged app did not reach v0.8.0 ready state' }
     $homePage = Invoke-WebRequest -Uri "$base/" -TimeoutSec 10
     if ($homePage.StatusCode -ne 200 -or $homePage.Content -notmatch '(/assets/index-[^" ]+\.js)') {
         throw 'Packaged app did not serve the compiled dashboard'

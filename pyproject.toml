@@ -1,6 +1,6 @@
 [project]
 name = "agent-workbench"
-version = "0.7.0"
+version = "0.8.0"
 description = "Personal, self-hosted Codex and Hermes activity workbench"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -10,6 +10,8 @@ dependencies = [
   "fastapi>=0.117,<1",
   "httpx>=0.28,<1",
   "psutil>=7.1,<8",
+  "pystray>=0.19.5,<0.20; sys_platform == 'win32'",
+  "pillow>=11,<13; sys_platform == 'win32'",
   "typer>=0.19,<1",
   "tzdata>=2025.2",
   "uvicorn>=0.36,<1",

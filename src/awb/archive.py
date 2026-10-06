@@ -37,6 +37,43 @@ CREATE TABLE IF NOT EXISTS archive_facts(
 );
 CREATE INDEX IF NOT EXISTS ix_archive_kind_time ON archive_facts(kind,occurred_at,device_id,agent);
 CREATE INDEX IF NOT EXISTS ix_archive_session ON archive_facts(device_id,agent,native_id,kind);
+CREATE TABLE IF NOT EXISTS archive_message_summaries(
+ device_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'message', agent TEXT NOT NULL,
+ native_id TEXT NOT NULL, fact_id TEXT NOT NULL, occurred_at TEXT, payload_json TEXT NOT NULL,
+ PRIMARY KEY(device_id,agent,native_id,fact_id)
+);
+CREATE INDEX IF NOT EXISTS ix_archive_summary_time ON archive_message_summaries(occurred_at,device_id,agent);
+CREATE TRIGGER IF NOT EXISTS archive_summary_insert AFTER INSERT ON archive_facts
+ WHEN NEW.kind='message' BEGIN
+ DELETE FROM archive_message_summaries WHERE device_id=NEW.device_id AND agent=NEW.agent
+ AND native_id=NEW.native_id AND fact_id=NEW.fact_id;
+ INSERT INTO archive_message_summaries
+ SELECT NEW.device_id,NEW.kind,NEW.agent,NEW.native_id,NEW.fact_id,NEW.occurred_at,
+ json_object('message_id',json_extract(NEW.payload_json,'$.message_id'),
+ 'role',COALESCE(json_extract(NEW.payload_json,'$.role'),''),
+ 'final',COALESCE(json_extract(NEW.payload_json,'$.final'),0),
+ 'preview',COALESCE(json_extract(NEW.payload_json,'$.preview'),''),
+ 'body_chars',length(COALESCE(json_extract(NEW.payload_json,'$.body'),'')),
+ 'source_offset',json_extract(NEW.payload_json,'$.source_offset'));
+END;
+CREATE TRIGGER IF NOT EXISTS archive_summary_update AFTER UPDATE ON archive_facts
+ WHEN NEW.kind='message' BEGIN
+ DELETE FROM archive_message_summaries WHERE device_id=NEW.device_id AND agent=NEW.agent
+ AND native_id=NEW.native_id AND fact_id=NEW.fact_id;
+ INSERT INTO archive_message_summaries
+ SELECT NEW.device_id,NEW.kind,NEW.agent,NEW.native_id,NEW.fact_id,NEW.occurred_at,
+ json_object('message_id',json_extract(NEW.payload_json,'$.message_id'),
+ 'role',COALESCE(json_extract(NEW.payload_json,'$.role'),''),
+ 'final',COALESCE(json_extract(NEW.payload_json,'$.final'),0),
+ 'preview',COALESCE(json_extract(NEW.payload_json,'$.preview'),''),
+ 'body_chars',length(COALESCE(json_extract(NEW.payload_json,'$.body'),'')),
+ 'source_offset',json_extract(NEW.payload_json,'$.source_offset'));
+END;
+CREATE TRIGGER IF NOT EXISTS archive_summary_delete AFTER DELETE ON archive_facts
+ WHEN OLD.kind='message' BEGIN
+ DELETE FROM archive_message_summaries WHERE device_id=OLD.device_id AND agent=OLD.agent
+ AND native_id=OLD.native_id AND fact_id=OLD.fact_id;
+END;
 CREATE TABLE IF NOT EXISTS archive_log(
  seq INTEGER PRIMARY KEY AUTOINCREMENT, device_id TEXT NOT NULL,
  kind TEXT NOT NULL, agent TEXT NOT NULL, native_id TEXT NOT NULL,
@@ -71,6 +108,17 @@ def initialize(db: Database) -> str:
     with closing(db.connect()) as conn:
         conn.executescript(SCHEMA)
     with db.tx() as conn:
+        if not conn.execute("SELECT 1 FROM archive_settings WHERE key='message_summary_v1'").fetchone():
+            conn.execute('''INSERT OR REPLACE INTO archive_message_summaries
+                SELECT device_id,kind,agent,native_id,fact_id,occurred_at,
+                json_object('message_id',json_extract(payload_json,'$.message_id'),
+                'role',COALESCE(json_extract(payload_json,'$.role'),''),
+                'final',COALESCE(json_extract(payload_json,'$.final'),0),
+                'preview',COALESCE(json_extract(payload_json,'$.preview'),''),
+                'body_chars',length(COALESCE(json_extract(payload_json,'$.body'),'')),
+                'source_offset',json_extract(payload_json,'$.source_offset'))
+                FROM archive_facts WHERE kind='message' ''')
+            conn.execute("INSERT INTO archive_settings VALUES('message_summary_v1','1')")
         row = conn.execute("SELECT value FROM archive_settings WHERE key='local_device_id'").fetchone()
         device_id = row[0] if row else str(uuid4())
         host = f'{platform.system()}:{platform.node()}'
@@ -153,11 +201,39 @@ def archive_local(db: Database, device_id: str) -> dict:
 
     changed = 0
     with db.read() as conn:
-        usage = [dict(r) for r in conn.execute('SELECT * FROM mvp_usage_requests')]
-        claude = [dict(r) for r in conn.execute('SELECT * FROM mvp_claude_requests')]
-        messages = [dict(r) for r in conn.execute('SELECT * FROM mvp_activity_messages')]
-        runs = [dict(r) for r in conn.execute('SELECT * FROM mvp_activity_runs')]
-        files = [dict(r) for r in conn.execute('SELECT * FROM mvp_activity_file_events')]
+        saved = conn.execute("SELECT value FROM archive_settings WHERE key='local_mirror_files'").fetchone()
+        previous = json.loads(saved[0]) if saved else None
+        current = {}
+        for table in ('mvp_usage_files', 'mvp_claude_files', 'mvp_activity_files'):
+            for row in conn.execute('SELECT * FROM '+table):
+                current[table+':'+row['source_file']] = [row['size_bytes'], row['modified_ns'],
+                    row['status'], row['parser_version'] if 'parser_version' in row.keys() else '']
+
+        def mirror(table, index):
+            if previous is None:
+                return [dict(r) for r in conn.execute('SELECT * FROM '+table)]
+            files = {key.split(':', 1)[1] for key, value in current.items()
+                     if key.startswith(index+':') and previous.get(key) != value}
+            tracked = {key.split(':', 1)[1] for key in current if key.startswith(index+':')}
+            # Hand-imported mirror rows without scanner metadata still need preservation.
+            files.update(row[0] for row in conn.execute('SELECT DISTINCT source_file FROM '+table)
+                         if row[0] not in tracked)
+            result = []
+            ordered = sorted(files)
+            for offset in range(0, len(ordered), 400):
+                selected = ordered[offset:offset+400]
+                marks = ','.join('?' for _ in selected)
+                result.extend(dict(r) for r in conn.execute(
+                    'SELECT * FROM '+table+' WHERE source_file IN ('+marks+')', selected))
+            return result
+
+        usage = mirror('mvp_usage_requests', 'mvp_usage_files')
+        claude = mirror('mvp_claude_requests', 'mvp_claude_files')
+        messages = mirror('mvp_activity_messages', 'mvp_activity_files')
+        runs = mirror('mvp_activity_runs', 'mvp_activity_files')
+        files = mirror('mvp_activity_file_events', 'mvp_activity_files')
+        metadata = {(row['agent'], row['native_id']): json.loads(row['payload_json'])
+                    for row in conn.execute("SELECT agent,native_id,payload_json FROM archive_facts WHERE kind='session' AND device_id=?", (device_id,))}
     titles = _codex_titles(codex_home())
     sessions: dict[tuple[str, str], dict] = defaultdict(lambda: {
         'title': '', 'cwd': None, 'sources': [], 'record_bytes': None,
@@ -177,6 +253,9 @@ def archive_local(db: Database, device_id: str) -> dict:
         sources[(row['agent'], row['native_id'])].add(row['source_file'])
     for key, paths in sources.items():
         item = sessions[key]
+        previous_meta = metadata.get(key, {})
+        paths.update(previous_meta.get('sources') or [])
+        item['cwd'] = previous_meta.get('cwd')
         item['sources'] = sorted(paths)
         sizes = []
         for raw in paths:
@@ -185,7 +264,7 @@ def archive_local(db: Database, device_id: str) -> dict:
             except OSError:
                 pass
             item['cwd'] = item['cwd'] or _source_cwd(Path(raw), key[0], key[1])
-        item['record_bytes'] = sum(sizes) if sizes else None
+        item['record_bytes'] = sum(sizes) if sizes else previous_meta.get('record_bytes')
     for (agent, native_id), item in sessions.items():
         if agent == 'codex':
             item['title'] = titles.get(native_id) or item['title']
@@ -198,7 +277,9 @@ def archive_local(db: Database, device_id: str) -> dict:
     hermes_files: list[dict] = []
     if hermes_path.is_file():
         stat = hermes_path.stat()
-        signature = f'{stat.st_size}:{stat.st_mtime_ns}'
+        wal = Path(str(hermes_path)+'-wal')
+        wal_signature = f'{wal.stat().st_size}:{wal.stat().st_mtime_ns}' if wal.is_file() else 'none'
+        signature = f'{stat.st_size}:{stat.st_mtime_ns}:{wal_signature}'
         with db.read() as conn:
             old = conn.execute("SELECT value FROM archive_settings WHERE key='hermes_scan_signature'").fetchone()
             if not old or old[0] != signature:
@@ -250,6 +331,14 @@ def archive_local(db: Database, device_id: str) -> dict:
                                 for index, event in enumerate(_hermes_file_events(
                                     conn, native_id, item['cwd'], str(hermes_path))))
     with db.tx() as conn:
+        # Native titles can change without appending to a source transcript.
+        for row in conn.execute("SELECT native_id,payload_json FROM archive_facts WHERE device_id=? AND kind='session' AND agent='codex'", (device_id,)).fetchall():
+            title = titles.get(row['native_id'])
+            value = json.loads(row['payload_json'])
+            if title and title != value.get('title') and ('codex', row['native_id']) not in sessions:
+                value['title'] = title
+                changed += _upsert_local(conn, device_id, 'session', 'codex', row['native_id'],
+                                         row['native_id'], value.get('last_at'), value)
         for row in usage:
             changed += _upsert_local(conn, device_id, 'usage', 'codex', row['native_session_id'],
                                      row['request_id'], row['occurred_at'], row)
@@ -282,6 +371,8 @@ def archive_local(db: Database, device_id: str) -> dict:
         if hermes_path.is_file() and hermes_messages:
             conn.execute("INSERT INTO archive_settings(key,value) VALUES('hermes_scan_signature',?) "
                          "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (signature,))
+        conn.execute("INSERT INTO archive_settings(key,value) VALUES('local_mirror_files',?) "
+                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(current),))
     return {'changed_facts': changed, 'local_device_id': device_id}
 
 
@@ -412,6 +503,19 @@ def refresh(db: Database, *, force: bool = False) -> dict:
             'imported_packets': imported}
 
 
+def refresh_if_empty(db: Database) -> None:
+    """Serve an existing archive immediately; bootstrap an empty one on first use."""
+    try:
+        with db.read() as conn:
+            ready = conn.execute("SELECT 1 FROM archive_facts WHERE kind IN ('usage','message') LIMIT 1").fetchone()
+    except sqlite3.OperationalError as exc:
+        if 'no such table: archive_facts' not in str(exc):
+            raise
+        ready = None
+    if ready is None:
+        refresh(db)
+
+
 def status(db: Database) -> dict:
     device_id = local_device_id(db)
     with db.read() as conn:
@@ -427,16 +531,34 @@ def status(db: Database) -> dict:
             'sync_ready': _exchange_dir(db) is not None, 'devices': devices}
 
 
-def facts(db: Database, kind: str, device_id: str | None = None) -> list[dict]:
+def facts(db: Database, kind: str, device_id: str | None = None,
+          start_at: str | None = None, end_at: str | None = None, *,
+          summaries: bool = False, agent: str | None = None,
+          native_id: str | None = None) -> list[dict]:
     condition = 'kind=?'
     params: list[str] = [kind]
     if device_id:
         condition += ' AND device_id=?'
         params.append(device_id)
+    if start_at:
+        condition += ' AND occurred_at>=?'
+        params.append(start_at)
+    if end_at:
+        condition += ' AND occurred_at<?'
+        params.append(end_at)
+    if agent:
+        condition += ' AND agent=?'
+        params.append(agent)
+    if native_id:
+        condition += ' AND native_id=?'
+        params.append(native_id)
+    table = 'archive_message_summaries' if kind == 'message' and summaries else 'archive_facts'
     with db.read() as conn:
-        rows = conn.execute('''SELECT device_id,agent,native_id,fact_id,occurred_at,payload_json
-            FROM archive_facts WHERE ''' + condition, params).fetchall()
-    result = [{**dict(row), **json.loads(row['payload_json'])} for row in rows]
+        rows = conn.execute('SELECT device_id,agent,native_id,fact_id,occurred_at,payload_json'
+                            + ' FROM ' + table + ' WHERE ' + condition, params)
+        # Decode rows while streaming; do not retain another full JSON transcript copy.
+        result = [{**{key: row[key] for key in row.keys() if key != 'payload_json'},
+                   **json.loads(row['payload_json'])} for row in rows]
     if device_id:
         return result
     # A copied native Agent history can be discovered on both computers. Its

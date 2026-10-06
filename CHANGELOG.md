@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.0 — Visible and recoverable Windows background (2026-10-06)
+
+- Add a native Windows tray with collection status, open/refresh/pause/resume/restart/log/exit actions; browser favicon, title and status bar distinguish successful collection, pending work and disconnection. No Electron or local password prompt.
+- Register a limited current-user logon task, unlimited execution duration, battery support and one-minute failure recovery. Repeated launches reuse one instance; isolated development and portable launches do not register the installed task. Add Mac LaunchAgent configuration without claiming Mac device validation.
+- Separate scheduled collection from archive queries. Archive changed source files incrementally, observe Hermes WAL changes, cache message summaries and filter detail reads by native session. Preserve historical facts when sources disappear.
+- Exclude imported synthetic task spans from verified execution time while retaining messages and estimated activity; correct long custom-range monthly buckets.
+- Refresh model reporting, navigation, responsive layout and shared typography from the existing local UI work. Preserve year/month/week/day heatmaps and honest Hermes aggregate precision.
+- Check stable GitHub releases in the background; verify installer size/hash, snapshot program and SQLite archive, coordinate shutdown/install/restart, validate health and attempt rollback on failure. Preserve failure evidence to avoid repeated automatic installs.
+- Embed source commit, version and build timestamp in packages and health/status APIs. Update Windows packaging, installer registration/removal, workflows, portable instructions and the usage/validation guide.
+- Windows validation results are attached to this release. Reboot/logon, 72-hour endurance, Mac/NAS device exchange and full live remote-update cycles remain explicit untested boundaries.
+
+
 ## 0.7.0 — Model intelligence and session discovery (2026-09-29)
 
 - Replace the redundant usage-period conversation panel with model comparison, share, trend, hourly frequency, request distribution, cache-rate charts and a model detail table. Make chart metrics switchable and keep Hermes session aggregates out of dated/request-level charts.

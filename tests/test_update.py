@@ -27,6 +27,27 @@ def test_only_newer_published_and_hashed_installers_are_selected():
     assert select_release([release("0.4.0")], "0.4.0") is None
 
 
+def test_prereleases_do_not_enter_the_stable_update_channel():
+    assert select_release([{**release('0.9.0'), 'prerelease': True}], '0.8.0') is None
+
+
+def test_update_snapshot_includes_consistent_database_and_old_program(tmp_path):
+    import sqlite3
+    directory = tmp_path/'installed'
+    directory.mkdir()
+    executable = directory/'AgentWorkbench.exe'
+    executable.write_bytes(b'old program')
+    db = tmp_path/'data.db'
+    with sqlite3.connect(db) as conn:
+        conn.execute('CREATE TABLE evidence(value TEXT)')
+        conn.execute('INSERT INTO evidence VALUES(?)', ('preserved',))
+    manager = UpdateManager(executable, tmp_path/'updates', db_path=db)
+    snapshot = manager.backup()
+    assert (snapshot/'program/AgentWorkbench.exe').read_bytes() == b'old program'
+    with sqlite3.connect(snapshot/'database.db') as conn:
+        assert conn.execute('SELECT value FROM evidence').fetchone()[0] == 'preserved'
+
+
 def test_download_verifies_bytes_before_launching_installer(monkeypatch, tmp_path: Path):
     content = b"test installer bytes"
     selected = select_release([release("0.4.2", digest="sha256:" + hashlib.sha256(content).hexdigest(),

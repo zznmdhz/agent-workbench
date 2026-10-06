@@ -3,19 +3,34 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from . import archive
-from .activity import _boilerplate, _bucket_bounds, _dt, _estimated, _key_messages, _union_ms
+from .activity import (
+    MAX_ESTIMATE_SECONDS,
+    _boilerplate,
+    _bucket_bounds,
+    _dt,
+    _estimated,
+    _key_messages,
+    _union_ms,
+)
 from .db import Database
 from .multi_usage import _add, _empty, _heatmap_keys, _range, _trend_dates, _values
 
 AGENTS = ('codex', 'claude', 'hermes')
 
 
-def _rows(db: Database, kind: str, device_id: str | None) -> list[dict]:
-    return archive.facts(db, kind, device_id)
+def _rows(db: Database, kind: str, device_id: str | None,
+          start_at: str | None = None, end_at: str | None = None, *, summaries: bool = False,
+          agent: str | None = None, native_id: str | None = None) -> list[dict]:
+    return archive.facts(db, kind, device_id, start_at, end_at, summaries=summaries,
+                         agent=agent, native_id=native_id)
+
+
+def _utc_key(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
 
 
 def _session_key(row: dict) -> tuple[str, str, str]:
@@ -88,13 +103,13 @@ def usage(db: Database, day: str, through: str, tz: str, *, agent: str | None = 
             if name != 'hermes':
                 local = at.astimezone(zone).date()
                 period = (local.isoformat() if grain == 'day' else
-                          local.strftime('%Y-%m') if grain == 'month' else
+                          local.replace(day=1).isoformat() if grain == 'month' else
                           (local.toordinal() - local.weekday()))
                 if grain == 'week':
                     period = date.fromordinal(period).isoformat()
                 _add(trend[period], values)
                 heat_key = (f'{local.isoformat()}T{at.astimezone(zone).hour:02d}'
-                            if heat_grain == 'hour' else local.strftime('%Y-%m')
+                            if heat_grain == 'hour' else local.replace(day=1).isoformat()
                             if heat_grain == 'month' else local.isoformat())
                 _add(heatmap[heat_key], values)
         except (ValueError, TypeError, KeyError, OverflowError):
@@ -166,7 +181,7 @@ def model_report(db: Database, day: str, through: str, tz: str, *, agent: str | 
             local = at.astimezone(zone)
             day_key = local.date()
             period = (day_key.isoformat() if grain == 'day' else
-                      day_key.strftime('%Y-%m') if grain == 'month' else
+                      day_key.replace(day=1).isoformat() if grain == 'month' else
                       date.fromordinal(day_key.toordinal()-day_key.weekday()).isoformat())
             _add(series[(period, name, model_name)], values)
             _add(hours[(local.hour, name, model_name)], values)
@@ -229,8 +244,17 @@ def requests(db: Database, agent: str, native_id: str, day: str, through: str, t
             'precision': 'session_model_aggregate' if agent == 'hermes' else 'request'}
 
 
-def _activity_data(db: Database, device_id: str | None):
-    messages = _rows(db, 'message', device_id)
+def _activity_data(db: Database, device_id: str | None,
+                   start: datetime, end: datetime):
+    # Estimates can cross a boundary by at most six hours. Keep those nearby
+    # messages while avoiding a full-history decode for a one-day view.
+    low = _utc_key(start - timedelta(seconds=MAX_ESTIMATE_SECONDS + 1))
+    high = _utc_key(end + timedelta(seconds=MAX_ESTIMATE_SECONDS + 1))
+    messages = _rows(db, 'message', device_id, low, high, summaries=True)
+    # Interval calculations need a short preview, never the complete transcript.
+    for row in messages:
+        row.pop('body', None)
+        row.pop('search_body', None)
     runs = _rows(db, 'run', device_id)
     meta = {_session_key(row): row for row in _rows(db, 'session', device_id)}
     # Make the existing interval estimator distinguish two devices with the
@@ -242,8 +266,9 @@ def _activity_data(db: Database, device_id: str | None):
         row['_native_id'] = row['native_id']
         row['native_id'] = f'{row["device_id"]}/{row["native_id"]}'
     intervals = []
+    from .activity import trusted_run
     for row in runs:
-        if row['end_at'] > row['start_at']:
+        if trusted_run(row) and row['end_at'] > row['start_at']:
             intervals.append({'agent': row['agent'], 'native_id': row['native_id'],
                               'start': _dt(row['start_at']), 'end': _dt(row['end_at']),
                               'precision': 'verified'})
@@ -263,7 +288,7 @@ def activity(db: Database, day: str, through: str, tz: str, *, heatmap_view: str
     if focus < first or focus > last:
         focus = first
     keys, grain = _heatmap_keys(first, last, heatmap_view)
-    messages, intervals, meta = _activity_data(db, device_id)
+    messages, intervals, meta = _activity_data(db, device_id, start, end)
     intervals = [row for row in intervals if agent in (None, row['agent'])]
     selected = [row for row in intervals if row['start'] < end and row['end'] > start]
 
@@ -310,6 +335,8 @@ def activity(db: Database, day: str, through: str, tz: str, *, heatmap_view: str
                                  'messages': 0, 'user_turns': 0, 'preview': ''})
     sessions = []
     for key, item in grouped.items():
+        if item['preview'].lstrip().startswith('<external_'):
+            item['preview'] = ''
         item['title'] = meta.get(key, {}).get('title') or item['preview'][:80] or f'{key[1]} · {key[2][:8]}'
         identity = f'{key[0]}/{key[2]}'
         item.update(measure([r for r in focus_runs if r['agent'] == key[1]
@@ -319,7 +346,7 @@ def activity(db: Database, day: str, through: str, tz: str, *, heatmap_view: str
     return {'summary': summary, 'by_agent': by_agent, 'heatmap': heatmap,
             'heatmap_granularity': grain, 'focus_day': focus.isoformat(),
             'sessions': sessions, 'timeline': [], 'source': {'hermes_ready': True},
-            'note': '时间来自 Workbench 底库；并行任务在自然经过时间中去重。完整任务事件为已证实，其余按消息间隔估算。'}
+            'note': '时间来自 Workbench 底库；并行任务在自然经过时间中去重。原生可信任务事件为已证实，导入合成边界不计入，其余按消息间隔估算。'}
 
 
 def browser(db: Database, day: str, through: str, tz: str, *, agent: str | None = None,
@@ -343,12 +370,13 @@ def browser(db: Database, day: str, through: str, tz: str, *, agent: str | None 
     session_keys = {_session_key(row) for row in sessions}
     text_sizes = defaultdict(int)
     matches = {}
-    for row in _rows(db, 'message', device_id):
+    for row in _rows(db, 'message', device_id, _utc_key(low), _utc_key(high),
+                     summaries=not needle or search_in not in {'all', 'content'}):
         key = _session_key(row)
         if key not in session_keys or not low <= _date(row['occurred_at']) < high:
             continue
         body = row.get('body') or ''
-        text_sizes[key] += len(body)
+        text_sizes[key] += row.get('body_chars', len(body))
         if needle and search_in in {'all', 'content'} and needle in body.casefold():
             matches.setdefault(key, {'type': '对话内容', 'excerpt': body[:160]})
     file_paths = defaultdict(set)
@@ -399,7 +427,11 @@ def conversation(db: Database, agent: str, native_id: str, *, device_id: str,
                  offset: int = 0, limit: int = 100) -> dict:
     if view not in {'full', 'key'}:
         raise ValueError('Invalid conversation view')
-    rows = [row for row in _rows(db, 'message', device_id)
+    window = _range(day, through or day, tz) if day else None
+    rows = [row for row in _rows(db, 'message', device_id,
+                                _utc_key(window[2]) if window else None,
+                                _utc_key(window[3]) if window else None,
+                                agent=agent, native_id=native_id)
             if row['agent'] == agent and row['native_id'] == native_id]
     if day:
         _, _, start, end, _ = _range(day, through or day, tz)
@@ -423,7 +455,7 @@ def inspector(db: Database, agent: str, native_id: str, *, device_id: str) -> di
         sources.append({'path': raw, 'bytes': size,
                         'status': 'present' if size is not None else 'remote' if not local else 'missing'})
     events = []
-    for row in _rows(db, 'file', device_id):
+    for row in _rows(db, 'file', device_id, agent=agent, native_id=native_id):
         if row['agent'] != agent or row['native_id'] != native_id:
             continue
         path = Path(row['native_path'])
