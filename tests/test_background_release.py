@@ -42,6 +42,15 @@ def test_pause_survives_scan_completion(tmp_path, monkeypatch):
     assert worker.snapshot()['paused']
 
 
+def test_isolated_databases_do_not_share_collection_status(tmp_path, monkeypatch):
+    first = Background(database(tmp_path))
+    monkeypatch.setattr(archive, 'refresh', lambda *a, **k: {})
+    first.scan_once()
+    second = Background(Database(tmp_path/'another.db'))
+    assert first.snapshot()['last_success']
+    assert second.snapshot()['last_success'] is None
+
+
 def test_single_instance_lock_is_released_after_exit(tmp_path):
     with lock(tmp_path/'app.db') as first:
         assert first

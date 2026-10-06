@@ -41,7 +41,7 @@ try {
     $collected = $false
     for ($attempt = 0; $attempt -lt 300; $attempt++) {
         $state = Invoke-RestMethod -Uri "$base/v1/local/background" -TimeoutSec 5
-        if ($state.last_success) { $collected = $true; break }
+        if ($state.scan_count -gt 0) { $collected = $true; break }
         if ($state.collector_state -eq 'error') { throw "Initial collection failed: $($state.error)" }
         Start-Sleep -Seconds 2
     }

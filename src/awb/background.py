@@ -16,7 +16,7 @@ class Background:
         self.stop_event, self.wake = Event(), Event()
         self.lock = Lock()
         self.started = time.monotonic()
-        self.status_file = db.path.parent / 'background-status.json'
+        self.status_file = db.path.with_name(db.path.stem+'-background-status.json')
         try:
             saved = json.loads(self.status_file.read_text(encoding='utf-8'))
         except (OSError, ValueError):
