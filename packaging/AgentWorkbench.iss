@@ -61,4 +61,4 @@ Filename: "{app}\AgentWorkbench.exe"; Parameters: "--register-background"; Flags
 Filename: "{app}\AgentWorkbench.exe"; Description: "启动 Agent Workbench"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-Filename: "{app}\AgentWorkbench.exe"; Parameters: "--unregister-background"; Flags: runhidden waituntilterminated
+Filename: "{app}\AgentWorkbench.exe"; Parameters: "--unregister-background"; Flags: runhidden waituntilterminated; RunOnceId: "RemoveUserBackground"

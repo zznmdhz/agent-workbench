@@ -36,7 +36,17 @@ try {
     $csrf = $me.csrf
     $today = (Get-Date).ToString('yyyy-MM-dd')
     $from = '2026-01-01'
-    $usage = Invoke-RestMethod -Uri "$base/v1/mvp/usage?day=$from&through=$today&tz=Asia%2FHong_Kong" -TimeoutSec 120
+    # A fresh database may have several GB of native history to import. HTTP
+    # readiness is separate from collection completion; keep both observable.
+    $collected = $false
+    for ($attempt = 0; $attempt -lt 300; $attempt++) {
+        $state = Invoke-RestMethod -Uri "$base/v1/local/background" -TimeoutSec 5
+        if ($state.last_success) { $collected = $true; break }
+        if ($state.collector_state -eq 'error') { throw "Initial collection failed: $($state.error)" }
+        Start-Sleep -Seconds 2
+    }
+    if (-not $collected) { throw 'Initial collection did not finish within ten minutes' }
+    $usage = Invoke-RestMethod -Uri "$base/v1/mvp/usage?day=$from&through=$today&tz=Asia%2FHong_Kong" -TimeoutSec 30
     $activity = Invoke-RestMethod -Uri "$base/v1/mvp/activity?day=$today&through=$today&tz=Asia%2FHong_Kong&heatmap_view=day&focus_day=$today" -TimeoutSec 120
     if ($activity.heatmap.Count -ne 24 -or $null -eq $activity.summary.wall_ms) {
         throw 'Packaged activity endpoint did not return the 24-hour view'

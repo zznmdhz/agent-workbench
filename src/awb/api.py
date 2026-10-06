@@ -228,6 +228,12 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     app.state.background = Background(db)
     app.state.restart_callback = None
 
+    def query_archive() -> None:
+        # The desktop worker owns first import. An empty archive must remain
+        # queryable while it scans, rather than holding a request for minutes.
+        if app.state.background.thread is None:
+            archive.refresh_if_empty(db)
+
     def owner_exists() -> bool:
         with db.read() as conn:
             return conn.execute("SELECT 1 FROM owner WHERE id=1").fetchone() is not None
@@ -535,7 +541,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
                   heatmap_view: str = "year", device_id: str | None = None,
                   _: str = Depends(require_owner)):
         try:
-            archive.refresh_if_empty(db)
+            query_archive()
             return archive_views.usage(db, day, through or day, tz, agent=agent, model=model,
                                        heatmap_view=heatmap_view, device_id=device_id)
         except (ValueError, KeyError) as exc:
@@ -546,7 +552,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
                          agent: str | None = None, model: str | None = None,
                          device_id: str | None = None, _: str = Depends(require_owner)):
         try:
-            archive.refresh_if_empty(db)
+            query_archive()
             return archive_views.model_report(db, day, through or day, tz,
                 agent=agent, model=model, device_id=device_id)
         except (ValueError, KeyError) as exc:
@@ -558,7 +564,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
                                    limit: int = Query(100, ge=1, le=200), device_id: str | None = None,
                                    _: str = Depends(require_owner)):
         try:
-            archive.refresh_if_empty(db)
+            query_archive()
             return archive_views.requests(db, agent, native_id, day, through or day, tz,
                                           model=model, limit=limit, device_id=device_id)
         except (ValueError, KeyError) as exc:
@@ -570,7 +576,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
                      agent: str | None = None, device_id: str | None = None,
                      _: str = Depends(require_owner)):
         try:
-            archive.refresh_if_empty(db)
+            query_archive()
             return archive_views.activity(db, day, through or day, tz,
                                           heatmap_view=heatmap_view, focus_day=focus_day,
                                           agent=agent, device_id=device_id)
@@ -585,7 +591,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
                                   offset: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200),
                                   _: str = Depends(require_owner)):
         try:
-            archive.refresh_if_empty(db)
+            query_archive()
             return archive_views.conversation(db, agent, native_id,
                 device_id=device_id or archive.local_device_id(db), offset=offset, limit=limit,
                 day=day, through=through, tz=tz, view=view)
@@ -603,7 +609,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
                               limit: int = Query(300, ge=1, le=1000),
                               _: str = Depends(require_owner)):
         try:
-            archive.refresh_if_empty(db)
+            query_archive()
             return archive_views.browser(db, day, through or day, tz, agent=agent,
                 query=q, device_id=device_id, search_in=search_in, sort=sort,
                 min_text=min_text, min_duration=min_duration,
@@ -616,7 +622,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
                                        device_id: str | None = None,
                                        _: str = Depends(require_owner)):
         try:
-            archive.refresh_if_empty(db)
+            query_archive()
             return archive_views.inspector(db, agent, native_id,
                 device_id=device_id or archive.local_device_id(db))
         except ValueError as exc:
@@ -645,7 +651,7 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
 
     @app.get('/v1/archive/status')
     def archive_status(_: str = Depends(require_owner)):
-        archive.refresh_if_empty(db)
+        query_archive()
         return archive.status(db)
 
     @app.post('/v1/archive/sync-root')

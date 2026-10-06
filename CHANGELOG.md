@@ -5,6 +5,7 @@
 - Add a native Windows tray with collection status, open/refresh/pause/resume/restart/log/exit actions; browser favicon, title and status bar distinguish successful collection, pending work and disconnection. No Electron or local password prompt.
 - Register a limited current-user logon task, unlimited execution duration, battery support and one-minute failure recovery. Repeated launches reuse one instance; isolated development and portable launches do not register the installed task. Add Mac LaunchAgent configuration without claiming Mac device validation.
 - Separate scheduled collection from archive queries. Archive changed source files incrementally, observe Hermes WAL changes, cache message summaries and filter detail reads by native session. Preserve historical facts when sources disappear.
+- Keep the first historical import nonblocking for dashboard queries; isolate loopback health/restart checks from system HTTP proxy settings.
 - Exclude imported synthetic task spans from verified execution time while retaining messages and estimated activity; correct long custom-range monthly buckets.
 - Refresh model reporting, navigation, responsive layout and shared typography from the existing local UI work. Preserve year/month/week/day heatmaps and honest Hermes aggregate precision.
 - Check stable GitHub releases in the background; verify installer size/hash, snapshot program and SQLite archive, coordinate shutdown/install/restart, validate health and attempt rollback on failure. Preserve failure evidence to avoid repeated automatic installs.

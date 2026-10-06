@@ -63,6 +63,15 @@ def test_background_status_does_not_trigger_a_scan_and_writes_require_csrf(tmp_p
     assert client.post('/v1/local/background/unknown', headers={'x-awb-csrf': csrf}).status_code == 422
 
 
+def test_first_import_serves_pending_data_without_waiting_for_worker(tmp_path, monkeypatch):
+    app = create_app(tmp_path/'app.db', desktop_mode=True)
+    app.state.background.thread = object()  # A running worker owns first scan.
+    monkeypatch.setattr(archive, 'refresh_if_empty', lambda *a: (_ for _ in ()).throw(AssertionError('blocking')))
+    client = TestClient(app, base_url='http://127.0.0.1:8765', client=('127.0.0.1', 50000))
+    for path in ('usage', 'activity', 'activity/sessions'):
+        assert client.get('/v1/mvp/'+path, params={'day': '2026-10-06'}).status_code == 200
+
+
 def test_imported_synthetic_spans_do_not_inflate_verified_execution(tmp_path):
     db = database(tmp_path)
     device = archive.local_device_id(db)

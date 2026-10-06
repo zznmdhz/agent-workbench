@@ -57,7 +57,7 @@ def reset_owner_password(db_path: Path) -> None:
 
 def _is_workbench(url: str) -> bool:
     try:
-        with httpx.Client(timeout=1) as client:
+        with httpx.Client(timeout=1, trust_env=False) as client:
             result = client.get(url + "/health/ready")
         body = result.json()
         return result.status_code == 200 and body.get("status") == "ready" and body.get("app_version") == __version__
@@ -196,7 +196,7 @@ def main() -> None:
         if args.unregister_background:
             autostart.unregister()
             try:
-                with httpx.Client(timeout=3) as client:
+                with httpx.Client(timeout=3, trust_env=False) as client:
                     client.post(f'http://127.0.0.1:{args.port}/auth/close-local')
             except httpx.HTTPError:
                 pass
@@ -211,7 +211,7 @@ def main() -> None:
                 pass
         url = f'http://127.0.0.1:{args.port}'
         if args.restart:
-            with httpx.Client(timeout=5) as client:
+            with httpx.Client(timeout=5, trust_env=False) as client:
                 try:
                     csrf = client.get(url+'/auth/me').json()['csrf']
                     client.post(url+'/v1/local/shutdown', headers={'x-awb-csrf': csrf}).raise_for_status()
