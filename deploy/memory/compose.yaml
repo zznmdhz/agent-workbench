@@ -1,0 +1,22 @@
+services:
+  memory:
+    build:
+      context: ../..
+      dockerfile: deploy/memory/Dockerfile
+    hostname: awb-memory
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8766:8766"
+    volumes:
+      - memory-data:/data
+    secrets:
+      - memory_token
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+volumes:
+  memory-data:
+secrets:
+  memory_token:
+    file: ./memory-token.txt

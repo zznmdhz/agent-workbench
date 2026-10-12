@@ -17,9 +17,9 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           version: '0.12.17'
-      - run: uv sync --frozen
-      - run: uv run pytest -q
-      - run: uv run ruff check src tests
+      - run: uv sync --frozen --extra memory-mcp
+      - run: uv run --extra memory-mcp pytest -q
+      - run: uv run --extra memory-mcp ruff check src tests
   frontend:
     runs-on: ubuntu-latest
     steps:

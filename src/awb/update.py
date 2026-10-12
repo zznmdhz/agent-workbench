@@ -131,6 +131,11 @@ class UpdateManager:
             with sqlite3.connect(self.db_path.resolve().as_uri()+'?mode=ro', uri=True) as source:
                 with sqlite3.connect(destination/'database.db') as target:
                     source.backup(target)
+            memory = self.db_path.parent / 'memory' / 'memory.db'
+            if memory.is_file():
+                with sqlite3.connect(memory.resolve().as_uri()+'?mode=ro', uri=True) as source:
+                    with sqlite3.connect(destination/'memory.db') as target:
+                        source.backup(target)
         return destination
 
     def status(self) -> dict:

@@ -215,5 +215,53 @@ def repair_codex_identity(
     typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
 
 
+
+@app.command("memory-mcp", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def memory_mcp(ctx: typer.Context):
+    """Serve reviewed memory over MCP stdio, without dashboard output on stdout."""
+    import sys
+
+    from .memory.mcp import main
+    sys.argv = ["memory-mcp", *ctx.args]
+    main()
+
+
+@app.command("memory-prompt", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def memory_prompt(ctx: typer.Context):
+    """Return bounded recall context for an optional host prompt adapter."""
+    import sys
+
+    from .memory.prompt import main
+    sys.argv = ["memory-prompt", *ctx.args]
+    main()
+
+
+@app.command("memory-backup")
+def memory_backup(database: Path = typer.Option(...), output: Path = typer.Option(...)):
+    """Export a verified memory snapshot without model or joining credentials."""
+    from .memory_bundle import backup_memory
+    typer.echo(json.dumps(backup_memory(database, output), ensure_ascii=False))
+
+
+@app.command("memory-restore")
+def memory_restore(bundle: Path = typer.Option(...), target: Path = typer.Option(...)):
+    """Restore into an empty local directory with a new writer identity."""
+    from .memory_bundle import restore_memory
+    typer.echo(str(restore_memory(bundle, target)))
+
+
+@app.command("memory-serve")
+def memory_serve(database: Path = typer.Option(...), token_file: Path = typer.Option(...),
+                 host: str = "127.0.0.1", port: int = 8766, scopes: str = "personal",
+                 allow_remote: bool = False, public_url: str | None = None):
+    """Standalone authenticated memory read/proposal API for future server deployments."""
+    from .memory_http import create_memory_service
+    if host not in {"127.0.0.1", "::1", "localhost"} and not allow_remote:
+        raise typer.BadParameter("Remote bind requires --allow-remote and HTTPS protection")
+    allowed = frozenset(value.strip() for value in scopes.split(',') if value.strip())
+    service = create_memory_service(database, token_file, allowed, public_url)
+    uvicorn.run(service, host=host, port=port, workers=1, access_log=False)
+
+
 if __name__ == "__main__":
     app()

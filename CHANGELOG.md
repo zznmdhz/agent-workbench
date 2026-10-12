@@ -128,3 +128,8 @@ Mac/NAS deployment and real cross-machine continuation remain outside this Windo
 
 - Provide a Windows portable ZIP started with `Start-AgentWorkbench.cmd`, local owner password setup, and a browser page at `127.0.0.1:8765`.
 - Include Codex/Hermes collection instructions in the portable package. Startup, readiness, web assets and login passed a Windows smoke test; Mac/NAS and dual-machine continuation were not validated.
+
+
+## 1.0.0rc1 — 2026-10-12
+
+保留Token、时间、会话归档和设备交换，增加独立共享记忆模块；各设备保留自己的SQLite，通过NAS交换带HMAC的不可变来源与操作包。候选审核、scope、固定证据、并发版本冲突、持久删除墓碑、独立后台、可选提炼与向量服务及统一请求预算均由memory core管理。新增Owner UI、官方SDK stdio MCP、受认证的远端读/提议API、空目录验证恢复与迁移说明。默认不开启云模型或自动改宿主配置。Windows实机与真实NAS传输仍需分端验收，候选不作为公证/代码签名发行版。
