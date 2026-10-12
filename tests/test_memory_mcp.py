@@ -1,5 +1,7 @@
 import asyncio
+import io
 import json
+import os
 import subprocess
 import sys
 import time
@@ -140,6 +142,53 @@ def test_prompt_real_stdin_plaintext_and_json(tmp_path, stdin):
     envelope = json.loads(result.stdout)
     assert envelope['type'] == 'awb_memory_evidence'
     assert envelope['items'][0]['id'] == memory['id']
+
+
+def test_prompt_uses_utf8_binary_stdout_when_text_surface_is_cp1252(tmp_path, monkeypatch):
+    store, _, memory = store_and_memory(tmp_path)
+    class LegacyConsole:
+        encoding = 'cp1252'
+        def __init__(self):
+            self.buffer = io.BytesIO()
+        def write(self, value):
+            raise AssertionError('Prompt must not write Unicode to the console text encoder')
+    console = LegacyConsole()
+    monkeypatch.setattr(sys, 'stdout', console)
+    prompt_main(['--database', str(store.path), '--scopes', 'personal', '--query', '客户版', '--no-sources'])
+    raw = console.buffer.getvalue()
+    assert '客户版'.encode('utf-8') in raw
+    assert json.loads(raw.decode('utf-8'))['items'][0]['id'] == memory['id']
+
+
+def test_prompt_text_only_stringio_fallback(tmp_path, monkeypatch):
+    store, _, memory = store_and_memory(tmp_path)
+    output = io.StringIO()
+    monkeypatch.setattr(sys, 'stdout', output)
+    prompt_main(['--database', str(store.path), '--scopes', 'personal', '--query', '客户版', '--no-sources'])
+    assert json.loads(output.getvalue())['items'][0]['id'] == memory['id']
+
+
+@pytest.mark.parametrize(('stdin', 'error'), [
+    ('客户版'.encode('utf-8'), None),
+    (b'{"prompt":"query"}\x1a\xff', 'stdin_invalid_utf8'),
+])
+def test_prompt_wire_utf8_without_utf8_console_environment(tmp_path, stdin, error):
+    store, _, memory = store_and_memory(tmp_path)
+    environment = dict(os.environ)
+    # Force the adverse console environment that caused the Windows CI failure;
+    # this is a regression test, not an application launch workaround.
+    environment['PYTHONIOENCODING'] = 'cp1252'
+    environment['PYTHONUTF8'] = '0'
+    result = subprocess.run([sys.executable, '-m', 'awb.memory.prompt', '--database', str(store.path),
+                             '--scopes', 'personal', '--no-sources'], input=stdin,
+                            capture_output=True, timeout=15, check=True, env=environment)
+    assert not result.stderr
+    envelope = json.loads(result.stdout.decode('utf-8'))
+    if error:
+        assert envelope['gaps'] == [error] and not envelope['items']
+    else:
+        assert envelope['items'][0]['id'] == memory['id']
+        assert '客户版'.encode('utf-8') in result.stdout
 
 
 @pytest.mark.parametrize(('stdin', 'error'), [

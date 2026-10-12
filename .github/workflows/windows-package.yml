@@ -29,8 +29,11 @@ jobs:
       - name: Test source
         run: |
           uv sync --frozen --extra memory-mcp
+          if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed" }
           uv run --extra memory-mcp pytest -q
+          if ($LASTEXITCODE -ne 0) { throw "Source tests failed" }
           uv run --extra memory-mcp ruff check src tests
+          if ($LASTEXITCODE -ne 0) { throw "Lint failed" }
       - name: Build installer and portable ZIP
         shell: pwsh
         run: ./packaging/build_windows.ps1

@@ -17,6 +17,31 @@ class PromptInputError(ValueError):
     pass
 
 
+def _binary_mode(descriptor: int) -> None:
+    if os.name == 'nt':
+        import msvcrt
+        msvcrt.setmode(descriptor, os.O_BINARY)
+
+
+def write_context(output: str) -> None:
+    """The hook wire format is UTF-8, independent of Windows console code pages."""
+    binary = getattr(sys.stdout, 'buffer', None)
+    if binary is not None:
+        try:
+            descriptor = binary.fileno()
+        except (AttributeError, OSError, ValueError):
+            descriptor = None  # in-memory capture buffers have no OS descriptor
+        if descriptor is not None:
+            _binary_mode(descriptor)
+        binary.write((output + '\n').encode('utf-8'))
+        binary.flush()
+    else:
+        # StringIO and similar text-only embedding/capture surfaces do not apply
+        # a console encoding; preserve the exact rendered byte-budgeted content.
+        sys.stdout.write(output + '\n')
+        sys.stdout.flush()
+
+
 def parse_stdin(raw: bytes) -> str:
     """Accept only the generic evidence-query contract, not arbitrary host envelopes."""
     if len(raw) > MAX_STDIN_BYTES:
@@ -50,6 +75,7 @@ def stdin_query() -> str:
         raise PromptInputError('stdin_not_piped')
     try:
         descriptor = sys.stdin.fileno()
+        _binary_mode(descriptor)
     except (AttributeError, OSError, ValueError) as exc:
         raise PromptInputError('stdin_unavailable') from exc
     output = Queue(maxsize=1)
@@ -116,7 +142,7 @@ def main(argv=None) -> None:
     except Exception:
         # A host hook must not stop the user's actual task on offline/budget errors.
         result = {'items': [], 'gaps': ['memory_adapter_unavailable']}
-    sys.stdout.write(render_context(result, budget_bytes=args.budget_bytes) + '\n')
+    write_context(render_context(result, budget_bytes=args.budget_bytes))
 
 
 if __name__ == '__main__':
