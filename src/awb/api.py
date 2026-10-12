@@ -227,6 +227,8 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     from .background import Background
     app.state.background = Background(db)
     app.state.restart_callback = None
+    from .memory_api import install_memory_routes
+    install_memory_routes(app, db)
 
     def query_archive() -> None:
         # The desktop worker owns first import. An empty archive must remain

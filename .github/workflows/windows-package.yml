@@ -2,6 +2,8 @@ name: Windows package
 on:
   workflow_dispatch:
   push:
+    branches:
+      - codex/shared-memory-v1
     tags:
       - 'v*'
 
@@ -26,16 +28,25 @@ jobs:
         run: choco install innosetup --yes --no-progress
       - name: Test source
         run: |
-          uv sync --frozen
-          uv run pytest -q
-          uv run ruff check src tests
+          uv sync --frozen --extra memory-mcp
+          if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed" }
+          uv run --extra memory-mcp pytest -q
+          if ($LASTEXITCODE -ne 0) { throw "Source tests failed" }
+          uv run --extra memory-mcp ruff check src tests
+          if ($LASTEXITCODE -ne 0) { throw "Lint failed" }
       - name: Build installer and portable ZIP
         shell: pwsh
         run: ./packaging/build_windows.ps1
+      - name: Verify frozen memory runtime
+        shell: pwsh
+        run: |
+          uv run --extra memory-mcp python packaging/verify_memory_runtime.py --executable .local/package-build/AgentWorkbench/AgentWorkbenchCLI.exe --output dist/memory-runtime-windows.json
+          if ($LASTEXITCODE -ne 0) { throw "Frozen memory runtime verification failed" }
       - uses: actions/upload-artifact@v4
         with:
           name: agent-workbench-windows
           path: |
             dist/AgentWorkbench-Setup-*-Windows-x64.exe
             dist/AgentWorkbench-Windows-portable-*.zip
+            dist/memory-runtime-windows.json
           if-no-files-found: error

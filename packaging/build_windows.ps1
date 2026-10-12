@@ -18,15 +18,15 @@ pnpm --dir web install --frozen-lockfile
 if ($LASTEXITCODE -ne 0) { throw 'pnpm install failed' }
 pnpm --dir web build
 if ($LASTEXITCODE -ne 0) { throw 'web build failed' }
-uv sync --frozen --group build
+uv sync --frozen --group build --extra memory-mcp
 if ($LASTEXITCODE -ne 0) { throw 'uv sync failed' }
-uv run --frozen --group build pyinstaller --noconfirm --onedir --contents-directory _internal `
-    --windowed --name AgentWorkbench --hidden-import awb.cli --hidden-import pystray._win32 --add-data "$workspace\web\dist:web/dist" --add-data "$workspace\src\awb\build.json:awb" `
+uv run --frozen --group build --extra memory-mcp pyinstaller --noconfirm --onedir --contents-directory _internal `
+    --windowed --name AgentWorkbench --collect-submodules awb.memory --collect-all mcp --hidden-import awb.cli --hidden-import pystray._win32 --add-data "$workspace\web\dist:web/dist" --add-data "$workspace\src\awb\build.json:awb" `
     --distpath (Join-Path $workspace '.local\package-build') `
     --workpath $work --specpath $spec packaging/desktop_entrypoint.py
 if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed' }
-uv run --frozen --group build pyinstaller --noconfirm --onedir --contents-directory _internal `
-    --console --name AgentWorkbenchCLI --add-data "$workspace\web\dist:web/dist" --add-data "$workspace\src\awb\build.json:awb" `
+uv run --frozen --group build --extra memory-mcp pyinstaller --noconfirm --onedir --contents-directory _internal `
+    --console --name AgentWorkbenchCLI --collect-submodules awb.memory --collect-all mcp --add-data "$workspace\web\dist:web/dist" --add-data "$workspace\src\awb\build.json:awb" `
     --distpath (Join-Path $workspace '.local\package-build-cli') `
     --workpath (Join-Path $workspace '.local\pyinstaller-cli-work') `
     --specpath $spec packaging/entrypoint.py

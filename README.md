@@ -1,8 +1,14 @@
 # Agent Workbench
 
-本机多 Agent 用量与会话工作台，当前版本 **v0.8.0**。只读发现 Codex、Claude Code、Hermes 的原始记录，将 Token、对话、用时和文件操作索引归档到自己的 SQLite 底库。无需 Electron，网页直接在浏览器中使用，Windows 本机访问无需密码。
+本机多 Agent 用量与会话工作台，本分支为 **v1.0.0rc1**。只读发现 Codex、Claude Code、Hermes 的原始记录，将 Token、对话、用时和文件操作索引归档到自己的 SQLite 底库。无需 Electron，网页直接在浏览器中使用，Windows 本机访问无需密码。
 
-## Windows 安装与日常使用
+## 共享记忆大版本
+
+在原看板之外增加独立记忆库、原文证据、待确认提炼、版本冲突、更正/停用/删除和MCP查询。Mac/Windows各自运行服务，NAS只交换签名事件包；默认不调用云模型。已有看板功能及统计口径保留。
+
+完整资料：[实施计划](docs/project/SHARED_MEMORY_V1_PLAN.md)、[独立计划审查](docs/project/SHARED_MEMORY_V1_PLAN_REVIEW.md)、[使用与迁移](docs/project/SHARED_MEMORY_V1_RUNBOOK.md)。MCP源码运行需 `uv sync --extra memory-mcp`。本分支不是已发布的Windows正式安装包；平台验收边界见验证报告。
+
+## v0.8 已发布Windows版本的安装与日常使用
 
 从 [v0.8.0 发布页](https://github.com/zznmdhz/agent-workbench/releases/tag/v0.8.0) 下载 `AgentWorkbench-Setup-0.8.0-Windows-x64.exe`，安装后从开始菜单打开 **Agent Workbench**。页面地址是 `http://127.0.0.1:8765/`。已有用户升级保留底库，首次回填可能需要等待。
 
