@@ -107,3 +107,10 @@ uv run --extra memory-mcp --group dev ruff check src tests
 结果：**56 passed**，约 41.7 秒，全 `src/tests` Ruff 通过。该定向集合重点覆盖新增重试、导出崩溃恢复、stdin 及此前跨模块反例；没有无必要重复全部模型处理测试。
 
 root 报告最新完整套件 **166 passed**（含原 87 项）、全源码 Ruff 和生产前端构建通过；这里区分 root 完整验证与独立审查者亲自运行的定向验证。Mac frozen app/CLI 的实际启动与 stdio 验收仍由 root 进行，不把该计划中测试写成已完成。
+
+
+## Windows CI 增量复审
+
+首次真实Windows CI检出两项中文stdin子进程测试失败：prompt输出经系统默认cp1252编码。修复改为UTF8 binary stdout，并对Windows stdin/stdout设O_BINARY；输入仍受8KiB/2000字符/2秒EOF边界。新增4项回归，包含强制cp1252且PYTHONUTF8=0的子进程。独立审查Agent亲自运行13项prompt定向测试通过，相关Ruff通过，结论APPROVE。
+
+同时为Windows打包workflow的每个native command增加LASTEXITCODE检查，避免pytest失败被后续Ruff成功掩盖。修复后的跨平台CI run38212041701（commit c1f8a3bae03dc1745697b94ecaab13954701897b）中Windows/macOS/Linux后端与前端全部success；这是CI runner验证，不等于用户Windows机器自启动或真实NAS已验收。
