@@ -8,3 +8,4 @@ def isolated_archive_exchange(tmp_path, monkeypatch):
     root = tmp_path / 'sync'
     (root / '.stfolder').mkdir(parents=True)
     monkeypatch.setenv('AWB_SYNC_ROOT', str(root))
+    monkeypatch.setenv('HERMES_STATE_DB', str(tmp_path / 'no-live-hermes.db'))

@@ -33,9 +33,13 @@ def hermes_db_path() -> Path:
     override = os.environ.get("HERMES_STATE_DB")
     if override:
         return Path(override).expanduser()
+    if os.environ.get('HERMES_HOME'):
+        return Path(os.environ['HERMES_HOME']).expanduser() / 'state.db'
     if sys.platform == "darwin":
         return Path.home() / ".hermes" / "state.db"
-    return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / "hermes" / "state.db"
+    legacy = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / "hermes" / "state.db"
+    home = Path.home() / '.hermes' / 'state.db'
+    return home if home.is_file() and not legacy.is_file() else legacy
 
 
 def _empty() -> dict:

@@ -149,10 +149,19 @@ def verify(executable: Path) -> dict:
         prompt = verify_prompt(executable, store, memory, environment, root)
         require(not store.model_usage()['items'], 'isolation', 'unexpected_model_request')
         require(not (root / 'unused-synthetic-nas').exists(), 'isolation', 'unexpected_nas_access')
+        desktop = (executable.parent / 'AgentWorkbench.exe' if sys.platform == 'win32'
+                   else executable.parents[2] / 'MacOS/AgentWorkbench')
+        require(desktop.is_file(), 'hermes_profiles', 'desktop_binary_missing')
+        result = subprocess.run([sys.executable, str(Path(__file__).with_name('verify_hermes_runtime.py')),
+                                 '--executable', str(desktop), '--output', str(root / 'hermes.json')],
+                                capture_output=True, timeout=60)
+        require(result.returncode == 0, 'hermes_profiles', 'frozen_profile_capture_failed')
+        hermes = json.loads((root / 'hermes.json').read_text(encoding='utf-8'))
     with executable.open('rb') as binary:
         checksum = hashlib.file_digest(binary, 'sha256').hexdigest()
     return {'schema': 1, 'success': True, 'executable_sha256': checksum,
-            'mcp': mcp, 'prompt': prompt, 'synthetic_data_only': True, 'model_requests': 0}
+            'mcp': mcp, 'prompt': prompt, 'hermes_profiles': hermes,
+            'synthetic_data_only': True, 'model_requests': 0}
 
 
 def main(argv=None) -> int:

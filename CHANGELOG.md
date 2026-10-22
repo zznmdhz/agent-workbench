@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0rc2 — Hermes profile archive fix
+
+- Discover Hermes `profiles/*/state.db` alongside the default database; respect custom `HERMES_HOME` and explicit single-database overrides.
+- Checkpoint each database and WAL independently, discover new profiles without restarting, namespace profile session IDs, and preserve existing default IDs.
+- Archive profile conversations, session/model usage and verified file evidence into the existing NAS packet flow. Isolate failed profile reads and surface scan errors without discarding healthy sources.
+- Add 10 regressions for cross-profile ID collisions, WAL-only changes, new/empty/broken profiles, replay, overrides and Windows path compatibility. Tests isolate native Hermes inputs from live user data.
+
+
 ## 0.8.0 — Visible and recoverable Windows background (2026-10-06)
 
 - Add a native Windows tray with collection status, open/refresh/pause/resume/restart/log/exit actions; browser favicon, title and status bar distinguish successful collection, pending work and disconnection. No Electron or local password prompt.
