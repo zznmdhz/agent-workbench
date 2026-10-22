@@ -11,12 +11,13 @@ import tempfile
 import time
 import urllib.parse
 import urllib.request
+from contextlib import closing
 from pathlib import Path
 
 
 def seed(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True)
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn:
         conn.executescript('''
             CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT,display_name TEXT,cwd TEXT);
             CREATE TABLE messages(id INTEGER PRIMARY KEY,session_id TEXT,role TEXT,
@@ -25,6 +26,7 @@ def seed(path: Path, text: str) -> None:
         ''')
         conn.execute('INSERT INTO messages VALUES(?,?,?,?,?,?)',
                      (1, 'same-id', 'user', 1792650000, text, None))
+        conn.commit()
 
 
 def main() -> None:
@@ -83,7 +85,7 @@ def main() -> None:
                     raise RuntimeError('Frozen desktop profile identity mismatch')
                 archive = get('/v1/archive/status')
                 device = archive['local_device_id']
-                with sqlite3.connect(root / 'local/agent-workbench.db') as conn:
+                with closing(sqlite3.connect(root / 'local/agent-workbench.db')) as conn:
                     bodies = {row[0]: json.loads(row[1])['body'] for row in conn.execute(
                         "SELECT native_id,payload_json FROM archive_facts WHERE kind='message' AND agent='hermes'")}
                 if bodies != {'same-id': '默认配置中文对话', 'profile:worker:same-id': '工作配置中文对话'}:

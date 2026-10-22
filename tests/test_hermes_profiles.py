@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -14,7 +15,7 @@ AT = 1792650000
 
 def source(path: Path, label='default', *, messages=True):
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as conn:
+    with closing(sqlite3.connect(path)) as conn:
         conn.executescript('''
             CREATE TABLE sessions(id TEXT PRIMARY KEY,title TEXT,display_name TEXT,cwd TEXT);
             CREATE TABLE messages(id INTEGER PRIMARY KEY,session_id TEXT,role TEXT,
@@ -35,6 +36,7 @@ def source(path: Path, label='default', *, messages=True):
             ])
             conn.execute('INSERT INTO session_model_usage VALUES(?,?,?,?,?,?,?,?,?,?)',
                          ('same-id', 'model', 'chat', 1, 10, 1, 0, 0, AT, AT + 2))
+        conn.commit()
 
 
 @pytest.fixture
@@ -93,7 +95,7 @@ def test_profile_wal_updates_are_captured_with_unchanged_database_file(setup):
     home, db, device = setup
     path = home / 'profiles/worker/state.db'
     source(path, 'worker')
-    with sqlite3.connect(path) as writer:
+    with closing(sqlite3.connect(path)) as writer:
         writer.execute('PRAGMA journal_mode=WAL')
         writer.execute('PRAGMA wal_autocheckpoint=0')
         writer.execute('PRAGMA wal_checkpoint(TRUNCATE)')
