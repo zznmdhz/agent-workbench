@@ -193,3 +193,37 @@ def test_failed_profile_is_visible_in_background_scan_errors(setup, monkeypatch)
     result = archive.refresh(db, force=True)
     assert result['scan']['hermes']['read_errors'] == 1
     assert result['scan']['hermes']['errors'][0]['profile'] == 'broken'
+
+
+def test_device_identity_rotation_rescans_default_and_profiles(setup):
+    home, db, original_device = setup
+    source(home / 'state.db')
+    source(home / 'profiles/worker/state.db', 'worker')
+    archive.archive_local(db, original_device)
+    with db.tx() as conn:
+        conn.execute("UPDATE archive_settings SET value='OtherOS:other-host' WHERE key='local_host'")
+    new_device = archive.initialize(db)
+    assert new_device != original_device
+    result = archive.archive_local(db, new_device)
+    assert result['hermes']['scanned'] == 2
+    assert archive.export_packets(db, new_device) > 0
+    with db.read() as conn:
+        for device in [original_device, new_device]:
+            rows = conn.execute("SELECT native_id FROM archive_facts WHERE kind='session' AND agent='hermes' AND device_id=?", (device,)).fetchall()
+            assert {row[0] for row in rows} == {'same-id', 'profile:worker:same-id'}
+
+
+def test_circular_profile_symlink_does_not_prevent_healthy_archive(setup):
+    home, db, device = setup
+    source(home / 'state.db')
+    loop = home / 'profiles/broken/state.db'
+    loop.parent.mkdir(parents=True)
+    try:
+        loop.symlink_to('state.db')
+    except OSError:
+        pytest.skip('OS does not allow unprivileged file symlinks')
+    result = archive.archive_local(db, device)
+    assert result['hermes']['read_errors'] == 1
+    assert result['hermes']['errors'][0]['profile'] == 'broken'
+    assert result['hermes']['scanned'] == 1
+    assert archive_views.conversation(db, 'hermes', 'same-id', device_id=device)['count'] == 2

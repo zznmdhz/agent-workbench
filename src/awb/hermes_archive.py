@@ -17,18 +17,26 @@ def native_key(profile: str, session_id: str) -> str:
     return f'profile:{quote(profile, safe="")}:{session_id}' if profile else session_id
 
 
-def sources(primary: Path) -> list[tuple[str, Path]]:
+def sources(primary: Path, *, errors: list[dict] | None = None) -> list[tuple[str, Path]]:
     candidates = [('', primary)]
     # An explicit database override is an intentional single-source boundary.
     if not os.environ.get('HERMES_STATE_DB'):
-        candidates.extend((path.parent.name, path)
-                          for path in sorted((primary.parent / 'profiles').glob('*/state.db')))
+        try:
+            candidates.extend((path.parent.name, path)
+                              for path in sorted((primary.parent / 'profiles').glob('*/state.db')))
+        except (OSError, RuntimeError) as exc:
+            if errors is not None:
+                errors.append({'profile': 'profiles', 'error': type(exc).__name__})
     result, seen = [], set()
     for profile, path in candidates:
-        resolved = path.resolve()
-        if path.is_file() and resolved not in seen:
-            seen.add(resolved)
-            result.append((profile, path))
+        try:
+            resolved = path.resolve()
+            if path.is_file() and resolved not in seen:
+                seen.add(resolved)
+                result.append((profile, path))
+        except (OSError, RuntimeError) as exc:
+            if errors is not None:
+                errors.append({'profile': profile or 'default', 'error': type(exc).__name__})
     return result
 
 
@@ -113,10 +121,12 @@ def collect(db, primary: Path) -> dict:
     saved = json.loads(row[0]) if row else {}
     result = {'sessions': {}, 'messages': [], 'usage': [], 'files': [], 'signatures': dict(saved),
               'sources': 0, 'scanned': 0, 'unchanged': 0, 'read_errors': 0, 'errors': []}
-    for profile, path in sources(primary):
+    discovered = sources(primary, errors=result['errors'])
+    result['read_errors'] = len(result['errors'])
+    for profile, path in discovered:
         result['sources'] += 1
-        key = json.dumps([profile, str(path.resolve())])
         try:
+            key = json.dumps([profile, str(path.resolve())])
             current = signature(path)
             if saved.get(key) == current:
                 result['unchanged'] += 1
@@ -127,7 +137,7 @@ def collect(db, primary: Path) -> dict:
                 result[name].extend(snapshot[name])
             result['signatures'][key] = current
             result['scanned'] += 1
-        except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
+        except (OSError, sqlite3.Error, ValueError, TypeError, RuntimeError) as exc:
             # Other profiles remain available. Failed sources are never checkpointed.
             result['read_errors'] += 1
             result['errors'].append({'profile': profile or 'default', 'error': type(exc).__name__})

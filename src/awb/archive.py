@@ -127,7 +127,8 @@ def initialize(db: Database) -> str:
             # A database copied to another computer must not make that computer
             # write into the source computer's packet stream.
             device_id = str(uuid4())
-            conn.execute("DELETE FROM archive_settings WHERE key IN ('last_exported_seq','hermes_scan_signature')")
+            conn.execute("DELETE FROM archive_settings WHERE key IN "
+                         "('last_exported_seq','hermes_scan_signature','hermes_scan_signatures_v2')")
         if not row or (marker and marker[0] != host):
             conn.execute("INSERT INTO archive_settings(key,value) VALUES('local_device_id',?) "
                          "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (device_id,))

@@ -10,7 +10,7 @@ Each source is read in one SQLite read transaction. A failed profile does not co
 
 Validation:
 
-- 181 backend tests passed locally, including 10 focused profile regressions; source lint and frontend build passed.
+- 183 backend tests passed locally, including 12 focused profile regressions; source lint and frontend build passed.
 - Profile tests exercise colliding IDs, new profiles after an unchanged default scan, WAL-only updates, empty and broken sources, retry recovery, source overrides, Windows path precedence, file evidence and NAS replay.
 - `packaging/verify_hermes_runtime.py` launches an isolated desktop executable against synthetic default/profile databases, checks both sessions through HTTP, checks exact Chinese bodies and verifies synthetic exchange packets. The existing `verify_memory_runtime.py` packaging gate invokes this check alongside frozen MCP/UTF-8 validation, so the unchanged Windows workflow also requires it.
 - Native stores, live archive repair and actual NAS completion require separate local verification. Private diagnostics and real conversation data are excluded from the repository and release assets.
