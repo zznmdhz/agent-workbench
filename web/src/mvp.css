@@ -158,6 +158,14 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible,su
 .mvpCard span,.mvpSource small,.mvpSource span,.mvpSessionBody small,.mvpSessionBody span,.mvpSessionDetailHead small,.mvpSessionDetailHead p,.mvpMessages small,.mvpTimeSummary span,.mvpTimeSummary small{color:var(--ink-500);font-size:12px}
 .mvpBrand small,.mvpTitle p,.mvpToolbarLabel,.mvpSessionSearch,.mvpAdvancedFilters label{color:var(--ink-500);font-size:12px}
 .mvpSessionName{white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;line-height:1.45}
+.mvpSessionTitleGroup{flex:1;min-width:0;display:grid;justify-items:start;gap:4px}
+.mvpSessionTitleGroup>.mvpSessionName{max-width:100%;overflow-wrap:anywhere}
+.mvpSessionCardMeta{display:flex;min-width:0;max-width:100%;flex-wrap:wrap;gap:4px 6px}
+.mvpSessionBadge{display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:100%;min-height:24px;padding:2px 7px;border:1px solid var(--border);border-radius:5px;background:var(--page-bg);color:var(--ink-700);font-size:11px;line-height:16px}
+.mvpSessionBadge svg{width:12px;height:12px;flex:none}.mvpSessionBadge>span{white-space:nowrap}
+.mvpSessionBadge strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-900);font-size:12px;font-weight:650}
+.mvpSessionTokenBadge strong{color:var(--brand-700);font-variant-numeric:tabular-nums}
+.mvpSessionBadge[data-missing=true]{background:transparent;color:var(--ink-500)}.mvpSessionBadge[data-missing=true] strong{color:inherit;font-weight:500}
 .mvpSessionItemActions button,.mvpFilters>button,.mvpPathRows button,.mvpFileEvents button{min-height:32px}
 .mvpTimeSummary{grid-template-columns:repeat(3,minmax(0,1fr))}
 @media(max-width:800px){.mvpCards{grid-template-columns:repeat(2,minmax(0,1fr))}.mvpCardHero{grid-column:1/-1}.mvpTimeSummary{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -184,3 +192,4 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible,su
 .backgroundMenu>div{position:absolute;right:0;top:100%;width:300px;z-index:50;background:white;border:1px solid #d2e3df;border-radius:12px;box-shadow:0 10px 30px #163c3020;padding:16px}
 .backgroundMenu p{font-size:12px;line-height:1.7}.backgroundMenu button{border:1px solid #d2e3df;background:#f4faf8;border-radius:6px;padding:7px 12px;margin-right:8px;cursor:pointer}
 @media(max-width:680px){.backgroundStatus{padding:8px 18px}.backgroundStatus small{width:100%;order:2}.backgroundMenu>div{width:min(280px,80vw)}}
+.mvpLoginCard .mvpLoginError{margin-top:14px;background:#fff1ef;color:#ac4d42;padding:9px 12px;border-radius:7px;font-size:12px}

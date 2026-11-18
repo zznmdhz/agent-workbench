@@ -336,9 +336,9 @@ def _estimated(messages: list[dict], agent: str) -> list[dict]:
                 if agent == 'codex' and _boilerplate(row['preview']):
                     continue
                 pending, last = row, None
-            elif pending:
+            elif row['role'] == 'assistant' and pending:
                 last = row
-                if row['final']:
+                if row.get('turn_final', row.get('final', False)):
                     start, end = _dt(pending['occurred_at']), _dt(row['occurred_at'])
                     seconds = (end - start).total_seconds()
                     if 0 < seconds <= MAX_ESTIMATE_SECONDS:

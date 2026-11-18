@@ -87,15 +87,9 @@ def require_owner(request: Request) -> str:
                 or (origin and origin.rstrip("/") != expected)):
             raise HTTPException(403, "Local desktop access only")
         return request.app.state.local_csrf
-    value = request.cookies.get("awb_session")
-    if not value:
-        raise HTTPException(401, "Login required")
-    db: Database = request.app.state.db
-    with db.read() as conn:
-        row = conn.execute("SELECT csrf,expires_at FROM web_sessions WHERE token_hash=?", (token_hash(value),)).fetchone()
-    if row is None or row["expires_at"] <= int(time.time()):
-        raise HTTPException(401, "Session expired")
-    return row["csrf"]
+    # The owner explicitly chose password-free web access on every network.
+    # Keep a per-process page token for CSRF protection, not authentication.
+    return request.app.state.local_csrf
 
 
 def require_owner_write(request: Request) -> None:

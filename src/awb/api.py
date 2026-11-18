@@ -217,7 +217,17 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     path = Path(db_path or os.environ.get("AWB_DB_PATH", "./data/agent-workbench.db"))
     db = Database(path)
     db.initialize()
-    app = FastAPI(title="Agent Workbench", version=__version__)
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def session_catalog_lifespan(_app):
+        start_session_catalog()
+        try:
+            yield
+        finally:
+            stop_session_catalog()
+
+    app = FastAPI(title="Agent Workbench", version=__version__, lifespan=session_catalog_lifespan)
     app.state.db = db
     app.state.desktop_mode = desktop_mode
     app.state.local_csrf = secrets.token_urlsafe(24)
@@ -227,14 +237,33 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     from .background import Background
     app.state.background = Background(db)
     app.state.restart_callback = None
-    from .memory_api import install_memory_routes
-    install_memory_routes(app, db)
+
+    def start_session_catalog():
+        from .session_catalog import catalog, install
+        from .raw_archive import initialize as initialize_raw_archive
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        initialize_raw_archive(db)
+        install(db)
+        projection = catalog(db)
+        today = datetime.now(ZoneInfo('Asia/Hong_Kong')).date()
+        projection.register(f'{today.year}-01-01', today.isoformat(), 'Asia/Hong_Kong', None)
+        projection.start()
+        from .usage_projection import projection as usage_projection
+        if os.environ.get('AWB_USAGE_READ_MODEL') != 'legacy':
+            usage_projection(db).start()
+
+    def stop_session_catalog():
+        from .session_catalog import catalog
+        catalog(db).stop()
+        from .usage_projection import projection as usage_projection
+        usage_projection(db).stop()
+
 
     def query_archive() -> None:
-        # The desktop worker owns first import. An empty archive must remain
-        # queryable while it scans, rather than holding a request for minutes.
-        if app.state.background.thread is None:
-            archive.refresh_if_empty(db)
+        # GETs are archive reads, never an implicit native Agent scan. Desktop
+        # background refresh and transactional HTTP ingestion own all writes.
+        return None
 
     def owner_exists() -> bool:
         with db.read() as conn:
@@ -293,43 +322,16 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
         raise HTTPException(422, 'Unknown or unavailable background action')
 
     @app.post("/auth/login")
-    def auth_login(body: Credentials, request: Request, response: Response):
-        if desktop_mode:
-            raise HTTPException(410, "Local desktop password login has been removed")
-        subject = request.client.host if request.client else "unknown"
-        check_rate(db, "login", subject)
-        try:
-            token, csrf = login(db, body.password)
-        except HTTPException:
-            record_failure(db, "login", subject)
-            raise
-        clear_failures(db, "login", subject)
-        set_owner_cookie(response, token, request)
-        return {"authenticated": True, "csrf": csrf}
+    def auth_login():
+        raise HTTPException(410, "Password login has been removed")
 
     @app.get("/auth/setup-status")
     def setup_status():
-        return {"needs_setup": False if desktop_mode else not owner_exists(),
-                "web_setup_available": False}
+        return {"needs_setup": False, "web_setup_available": False}
 
     @app.post("/auth/setup")
-    def auth_setup(body: SetupCredentials, request: Request, response: Response):
-        if desktop_mode:
-            raise HTTPException(410, "Local desktop password setup has been removed")
-        require_local_desktop(request)
-        if owner_exists():
-            raise HTTPException(409, "Owner account already exists")
-        if body.password != body.confirmation:
-            raise HTTPException(422, "Passwords do not match")
-        if len(body.password) < 12:
-            raise HTTPException(422, "Password must have at least 12 characters")
-        try:
-            initialize_owner(db, body.password)
-        except ValueError as exc:
-            raise HTTPException(409, "Owner account already exists") from exc
-        token, csrf = login(db, body.password)
-        set_owner_cookie(response, token, request)
-        return {"authenticated": True, "csrf": csrf}
+    def auth_setup():
+        raise HTTPException(410, "Password setup has been removed")
 
     @app.post("/auth/cancel-setup")
     def cancel_setup(request: Request, background_tasks: BackgroundTasks):
@@ -350,18 +352,12 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
         return {"stopping": True}
 
     @app.post("/auth/logout")
-    def auth_logout(request: Request, response: Response, _: None = Depends(require_owner_write)):
-        if desktop_mode:
-            raise HTTPException(410, "Local desktop password logout has been removed")
-        token = request.cookies.get("awb_session", "")
-        with db.tx() as conn:
-            conn.execute("DELETE FROM web_sessions WHERE token_hash=?", (token_hash(token),))
-        response.delete_cookie("awb_session", path="/")
-        return {"authenticated": False}
+    def auth_logout():
+        raise HTTPException(410, "Password logout has been removed")
 
     @app.get("/auth/me")
     def auth_me(csrf: str = Depends(require_owner)):
-        return {"authenticated": True, "csrf": csrf}
+        return {"authenticated": True, "csrf": csrf, "desktop_mode": app.state.desktop_mode}
 
     @app.post("/v1/local/shutdown")
     def local_shutdown(request: Request, background_tasks: BackgroundTasks,
@@ -537,6 +533,52 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, "Invalid day or timezone") from exc
 
+    from .usage_projection import ProjectionInitializing
+    import sqlite3
+
+    @app.exception_handler(sqlite3.OperationalError)
+    async def query_operational_error(_request, exc):
+        if _request.method!='GET' or not _request.url.path.startswith('/v1/mvp/'):
+            raise exc
+        code=getattr(exc,'sqlite_errorcode',0)&0xff
+        message=str(exc).lower()
+        interrupted=code==sqlite3.SQLITE_INTERRUPT or 'interrupted' in message
+        busy=code in (sqlite3.SQLITE_BUSY,sqlite3.SQLITE_LOCKED) or 'locked' in message
+        if not (interrupted or busy):raise exc
+        return JSONResponse({'code':'query_budget_exceeded' if interrupted else 'query_busy',
+                             'data':None,'retryable':True,
+                             'detail':'本次统计读取达到执行预算，请稍后重试；已有结果保留。' if interrupted else '统计数据正在更新，请稍后重试；已有结果保留。'},
+                            status_code=503,headers={'Retry-After':'2'})
+
+    @app.exception_handler(ProjectionInitializing)
+    async def usage_projection_initializing(_request, exc):
+        return JSONResponse({'code':'projection_initializing','data':None,'detail':str(exc)},
+                            status_code=503,headers={'Retry-After':'2'})
+
+    @app.get('/v1/mvp/overview')
+    def mvp_overview(day: str, through: str | None = None, tz: str = 'Asia/Hong_Kong',
+                     agent: str | None = None, model: str | None = None,
+                     heatmap_view: str = 'year', device_id: str | None = None,
+                     _: str = Depends(require_owner)):
+        from .usage_projection import use_snapshot
+        try:
+            with use_snapshot(db) as snapshot:
+                usage = archive_views.usage(db,day,through or day,tz,agent=agent,model=model,
+                                             heatmap_view=heatmap_view,device_id=device_id)
+                report = archive_views.model_report(db,day,through or day,tz,agent=agent,model=model,device_id=device_id)
+                return {'usage':usage,'report':report,'projection':snapshot.state}
+        except (ValueError,KeyError) as exc:
+            raise HTTPException(422,'Invalid overview filter') from exc
+
+    @app.get('/v1/mvp/projection/status')
+    def mvp_projection_status(_: str = Depends(require_owner)):
+        from .usage_projection import projection
+        worker=projection(db)
+        try:
+            with worker.snapshot() as snapshot:return snapshot.state
+        except ProjectionInitializing:
+            return worker.status()
+
     @app.get("/v1/mvp/usage")
     def mvp_usage(day: str, through: str | None = None, tz: str = "Asia/Hong_Kong",
                   agent: str | None = None, model: str | None = None,
@@ -548,6 +590,16 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
                                        heatmap_view=heatmap_view, device_id=device_id)
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, "Invalid usage date range or timezone") from exc
+
+    @app.get('/v1/mvp/session-counts')
+    def mvp_session_counts(day: str, through: str | None = None, tz: str = 'Asia/Hong_Kong',
+                           agent: str | None = None, device_id: str | None = None,
+                           _: str = Depends(require_owner)):
+        from .session_identity import created_counts
+        try:
+            return created_counts(db, day, through or day, tz, agent=agent, device_id=device_id)
+        except (ValueError, KeyError) as exc:
+            raise HTTPException(422, 'Invalid session date range or source') from exc
 
     @app.get("/v1/mvp/usage/report")
     def mvp_model_report(day: str, through: str | None = None, tz: str = "Asia/Hong_Kong",
@@ -600,22 +652,34 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, "Invalid conversation source") from exc
 
+    @app.get('/v1/mvp/freshness')
+    def mvp_freshness(device_id: str | None = None, _: str = Depends(require_owner)):
+        from .freshness import status
+        return status(db,device_id)
+
     @app.get("/v1/mvp/activity/sessions")
     def mvp_activity_sessions(day: str, through: str | None = None,
                               tz: str = "Asia/Hong_Kong", agent: str | None = None,
                               q: str = "", device_id: str | None = None,
+                              source_id: str | None = None, profile: str | None = None,
+                              session_scope: str = 'conversation',
                               search_in: str = "all", sort: str = "recent",
                               min_text: int = Query(0, ge=0),
                               min_duration: int = Query(0, ge=0),
                               has_files: bool = False,
                               limit: int = Query(300, ge=1, le=1000),
+                              offset: int = Query(0, ge=0),
                               _: str = Depends(require_owner)):
         try:
             query_archive()
-            return archive_views.browser(db, day, through or day, tz, agent=agent,
+            result = archive_views.browser(db, day, through or day, tz, agent=agent,
                 query=q, device_id=device_id, search_in=search_in, sort=sort,
                 min_text=min_text, min_duration=min_duration,
-                has_files=has_files, limit=limit)
+                has_files=has_files, limit=limit, offset=offset, source_id=source_id, profile=profile,
+                session_scope=session_scope)
+            if result.get('projection', {}).get('state') == 'building':
+                return JSONResponse(result, status_code=202, headers={'Retry-After':'2'})
+            return result
         except (ValueError, KeyError) as exc:
             raise HTTPException(422, "Invalid session date range or timezone") from exc
 
@@ -654,7 +718,26 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     @app.get('/v1/archive/status')
     def archive_status(_: str = Depends(require_owner)):
         query_archive()
-        return archive.status(db)
+        status = archive.status(db)
+        with db.read() as conn:
+            exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name='raw_archive_device_aliases'").fetchone()
+            aliases = dict(conn.execute('SELECT alias_id,canonical_id FROM raw_archive_device_aliases')) if exists else {}
+        if aliases:
+            original = status['devices']
+            rows = {r['id']: r for r in original}
+            groups = {}
+            for row in original:
+                if not row['facts'] and not row['local']:
+                    continue
+                key = aliases.get(row['id'], row['id'])
+                item = groups.setdefault(key, {**rows.get(key, row), 'id': key,
+                    'facts': 0, 'local': False, 'physical_device_ids': []})
+                item['facts'] += row['facts']
+                item['local'] = item['local'] or row['local']
+                item['physical_device_ids'].append(row['id'])
+            status['physical_devices'] = original
+            status['devices'] = sorted(groups.values(), key=lambda r: (not r['local'], r['name']))
+        return status
 
     @app.post('/v1/archive/sync-root')
     def archive_set_sync_root(body: SyncRootRequest, request: Request,
@@ -1108,6 +1191,47 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
     def handoff_link(handoff_id: str, body: ContinuationRequest, _: None = Depends(require_owner_write)):
         return link_continuation(db, handoff_id, body.target_session_id)
 
+    @app.get('/v1/local/sessions/{session_id}/native-events')
+    def native_events(session_id: str, request: Request, after: int = 0, limit: int = 100,
+                      _: str = Depends(require_owner)):
+        require_local_desktop(request)
+        limit = max(1, min(limit, 200))
+        with db.read() as conn:
+            rows = conn.execute('''SELECT rowid,event_id,content_json FROM events
+                WHERE source_id=(SELECT source_id FROM sessions WHERE id=?)
+                AND native_session_id=(SELECT native_id FROM sessions WHERE id=?)
+                AND rowid>? ORDER BY rowid LIMIT ?''', (session_id, session_id, after, limit + 1)).fetchall()
+        items = []
+        for row in rows[:limit]:
+            content = json.loads(row['content_json'])
+            payload = content['payload']
+            if content['fact_kind'] in {'artifact.observed', 'capture.fragment'}:
+                payload.pop('data_base64', None)
+            items.append({'cursor': row['rowid'], 'event_id': row['event_id'], 'content': content})
+        return {'items': items, 'has_more': len(rows) > limit,
+                'next_cursor': rows[limit-1]['rowid'] if len(rows) >= limit else None,
+                'protection': 'local_desktop_only', 'secret_filtering': 'applied_not_a_guarantee_for_arbitrary_prose'}
+
+    @app.get('/v1/local/sessions/{session_id}/artifacts/{digest}')
+    def artifact_bytes(session_id: str, digest: str, request: Request, _: str = Depends(require_owner)):
+        require_local_desktop(request)
+        from .blobs import read_blob
+        from fastapi.responses import Response
+        with db.read() as conn:
+            allowed = conn.execute('''SELECT 1 FROM events e JOIN sessions s
+                ON e.source_id=s.source_id AND e.native_session_id=s.native_id
+                WHERE s.id=? AND e.fact_kind='artifact.observed'
+                AND json_extract(awb_payload_text(e.content_json),'$.payload.sha256')=? LIMIT 1''', (session_id, digest)).fetchone()
+            if not allowed:
+                raise HTTPException(404, 'Artifact not found in session')
+            try:
+                data = read_blob(conn, digest)
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
+        return Response(data, media_type='application/octet-stream', headers={
+            'Content-Disposition': 'attachment; filename="artifact.bin"', 'Cache-Control': 'no-store',
+            'X-Content-SHA256': digest})
+
     @app.delete("/v1/sessions/{session_id}/content")
     def delete_content(session_id: str, body: DeleteContent, _: None = Depends(require_owner_write)):
         if body.confirmation != session_id:
@@ -1128,11 +1252,11 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
                 pass
             conn.execute("""UPDATE deliveries SET raw_json=NULL WHERE event_id IN
                 (SELECT event_id FROM events WHERE source_id=? AND native_session_id=?
-                 AND fact_kind IN ('session.observed','message.observed','file.observed'))""", (row["source_id"], row["native_id"]))
+                 AND fact_kind IN ('session.observed','message.observed','file.observed','native.observed','artifact.observed','capture.fragment'))""", (row["source_id"], row["native_id"]))
             # Revisions keep their own immutable event IDs. Remove every message
             # revision, not only the event currently referenced by the projection.
             conn.execute("""DELETE FROM events WHERE source_id=? AND native_session_id=?
-                AND fact_kind IN ('session.observed','message.observed','file.observed')""", (row["source_id"], row["native_id"]))
+                AND fact_kind IN ('session.observed','message.observed','file.observed','native.observed','artifact.observed','capture.fragment')""", (row["source_id"], row["native_id"]))
             if not body.keep_statistics:
                 conn.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
                 conn.execute("DELETE FROM usage_observations WHERE session_id=?", (session_id,))
@@ -1141,6 +1265,9 @@ def create_app(db_path: str | Path | None = None, *, desktop_mode: bool = False)
                     (SELECT event_id FROM events WHERE source_id=? AND native_session_id=?)""",
                              (row["source_id"], row["native_id"]))
                 conn.execute("DELETE FROM events WHERE source_id=? AND native_session_id=?", (row["source_id"], row["native_id"]))
+            conn.execute("DELETE FROM capture_fragments WHERE source_id=? AND native_session_id=?", (row["source_id"], row["native_id"]))
+            from .blobs import purge_unreferenced
+            purge_unreferenced(conn)
             archives = [Path(r[0]) for r in conn.execute("SELECT archive_path FROM handoffs WHERE source_session_id=?", (session_id,))]
             conn.execute("UPDATE handoffs SET revoked_at=? WHERE source_session_id=? AND revoked_at IS NULL", (now_iso(), session_id))
         purge_result = None

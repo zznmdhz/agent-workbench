@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — 2026-11-15 through 2026-11-18 · Mini source snapshot
+
+- Add incremental session pagination and a usage read model with atomic publication, bounded diagnostics and a single request snapshot for dashboard summaries.
+- Distinguish interactive, internal and unknown sessions; separate created-session counts from date-range activity and usage, without removing backend usage.
+- Show source computer, archived lifetime tokens and measured source content bytes at session level; unknown values and lower bounds are not zeros.
+- Preserve source request counts, cache writes, time boundaries and completion evidence across incremental and real-time paths. Do not spread coarse source aggregates across finer time buckets.
+- Bound retry responses for temporary SQLite contention and avoid duplicating usage candidate reads. Preserve the original data, acknowledgements and independent backup policy.
+- This is a candidate source sync, not a Windows build, a new data migration, a completed live cutover or a performance SLA.
+
 ## 1.0.0rc2 — Hermes profile archive fix
 
 - Discover Hermes `profiles/*/state.db` alongside the default database; respect custom `HERMES_HOME` and explicit single-database overrides.

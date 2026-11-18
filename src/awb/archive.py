@@ -22,6 +22,7 @@ from threading import Lock
 from uuid import uuid4
 
 from .db import Database
+from .archive_payload_codec import pack as pack_cold_payload, unpack as unpack_cold_payload
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS archive_settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -127,8 +128,7 @@ def initialize(db: Database) -> str:
             # A database copied to another computer must not make that computer
             # write into the source computer's packet stream.
             device_id = str(uuid4())
-            conn.execute("DELETE FROM archive_settings WHERE key IN "
-                         "('last_exported_seq','hermes_scan_signature','hermes_scan_signatures_v2')")
+            conn.execute("DELETE FROM archive_settings WHERE key IN ('last_exported_seq','hermes_scan_signature')")
         if not row or (marker and marker[0] != host):
             conn.execute("INSERT INTO archive_settings(key,value) VALUES('local_device_id',?) "
                          "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (device_id,))
@@ -184,7 +184,7 @@ def _upsert_local(conn: sqlite3.Connection, device_id: str, kind: str, agent: st
         return False
     cursor = conn.execute('''INSERT INTO archive_log(device_id,kind,agent,native_id,fact_id,
         occurred_at,payload_json,checksum) VALUES(?,?,?,?,?,?,?,?)''',
-        (device_id, kind, agent, native_id, fact_id, occurred_at, payload, checksum))
+        (device_id, kind, agent, native_id, fact_id, occurred_at, pack_cold_payload(payload), checksum))
     conn.execute('''INSERT INTO archive_facts(device_id,kind,agent,native_id,fact_id,
         occurred_at,payload_json,checksum,origin_seq) VALUES(?,?,?,?,?,?,?,?,?)
         ON CONFLICT(device_id,kind,agent,native_id,fact_id) DO UPDATE SET
@@ -196,7 +196,7 @@ def _upsert_local(conn: sqlite3.Connection, device_id: str, kind: str, agent: st
 
 def archive_local(db: Database, device_id: str) -> dict:
     """Copy all discovered local facts; missing source files never purge facts."""
-    from .activity import _iso, _source_cwd
+    from .activity import _hermes_file_events, _iso, _source_cwd
     from .multi_usage import _codex_titles, hermes_db_path
     from .mvp_usage import codex_home
 
@@ -272,12 +272,65 @@ def archive_local(db: Database, device_id: str) -> dict:
         elif agent == 'claude' and not item['title']:
             item['title'] = f'Claude · {native_id[:8]}'
 
-    from .hermes_archive import CHECKPOINT, collect
-
-    hermes = collect(db, hermes_db_path())
-    sessions.update(hermes['sessions'])
-    hermes_messages, hermes_usage, hermes_files = (
-        hermes['messages'], hermes['usage'], hermes['files'])
+    hermes_path = hermes_db_path()
+    hermes_messages: list[dict] = []
+    hermes_usage: list[dict] = []
+    hermes_files: list[dict] = []
+    if hermes_path.is_file():
+        stat = hermes_path.stat()
+        wal = Path(str(hermes_path)+'-wal')
+        wal_signature = f'{wal.stat().st_size}:{wal.stat().st_mtime_ns}' if wal.is_file() else 'none'
+        signature = f'{stat.st_size}:{stat.st_mtime_ns}:{wal_signature}'
+        with db.read() as conn:
+            old = conn.execute("SELECT value FROM archive_settings WHERE key='hermes_scan_signature'").fetchone()
+            if not old or old[0] != signature:
+                with closing(sqlite3.connect(hermes_path.resolve().as_uri() + '?mode=ro', uri=True, timeout=10)) as conn:
+                    conn.row_factory = sqlite3.Row
+                    tables = {row[0] for row in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'")}
+                    session_columns = {column[1] for column in conn.execute('PRAGMA table_info(sessions)')}
+                    display = 'display_name' if 'display_name' in session_columns else 'NULL'
+                    cwd_column = 'cwd' if 'cwd' in session_columns else 'NULL AS cwd'
+                    for row in conn.execute(f'SELECT id,title,{display} AS display_name,'
+                                            f'{cwd_column} FROM sessions'):
+                        native_id = str(row['id'])
+                        item = sessions[('hermes', native_id)]
+                        item['title'] = row['title'] or row['display_name'] or item['title']
+                        item['cwd'] = row['cwd']
+                        item['sources'] = [str(hermes_path)]
+                    message_columns = ({column[1] for column in conn.execute('PRAGMA table_info(messages)')}
+                                       if 'messages' in tables else set())
+                    def message_field(name: str) -> str:
+                        return name if name in message_columns else f'NULL AS {name}'
+                    message_sql = (f"SELECT id,session_id,role,timestamp,{message_field('finish_reason')},"
+                                   f"{message_field('content')},{message_field('tool_calls')},"
+                                   f"{message_field('tool_name')} FROM messages ORDER BY timestamp,id")
+                    for row in conn.execute(message_sql) if message_columns else []:
+                        native_id = str(row['session_id'])
+                        at = _iso(row['timestamp'])
+                        if not at:
+                            continue
+                        item = sessions[('hermes', native_id)]
+                        item['first_at'] = min(item['first_at'] or at, at)
+                        item['last_at'] = max(item['last_at'] or at, at)
+                        item['payload_bytes'] = (item['payload_bytes'] or 0) + len(
+                            (row['content'] or '').encode('utf-8')) + len((row['tool_calls'] or '').encode('utf-8'))
+                        if row['role'] in {'user', 'assistant'}:
+                            hermes_messages.append({'agent': 'hermes', 'native_id': native_id,
+                                'message_id': str(row['id']), 'occurred_at': at, 'role': row['role'],
+                                'final': int(row['finish_reason'] == 'stop'), 'preview': (row['content'] or '')[:160],
+                                'body': row['content'] or '', 'source_file': str(hermes_path), 'source_offset': 0})
+                    for row in (conn.execute('''SELECT u.session_id,u.model,u.task,u.api_call_count,
+                        u.input_tokens,u.output_tokens,u.cache_read_tokens,u.cache_write_tokens,
+                        u.first_seen,u.last_seen FROM session_model_usage u''')
+                                if 'session_model_usage' in tables else []):
+                        hermes_usage.append(dict(row))
+                    for (agent, native_id), item in sessions.items():
+                        if agent == 'hermes' and {'tool_calls', 'tool_call_id', 'tool_name'} <= message_columns:
+                            hermes_files.extend({'agent': agent, 'native_id': native_id,
+                                'event_key': f"{event['occurred_at']}:{index}:{event['native_path']}", **event}
+                                for index, event in enumerate(_hermes_file_events(
+                                    conn, native_id, item['cwd'], str(hermes_path))))
     with db.tx() as conn:
         # Native titles can change without appending to a source transcript.
         for row in conn.execute("SELECT native_id,payload_json FROM archive_facts WHERE device_id=? AND kind='session' AND agent='codex'", (device_id,)).fetchall():
@@ -316,14 +369,12 @@ def archive_local(db: Database, device_id: str) -> dict:
                 item['title'] = f'{agent} · {native_id[:8]}'
             changed += _upsert_local(conn, device_id, 'session', agent, native_id,
                                      native_id, item['last_at'], item)
-        conn.execute("INSERT INTO archive_settings(key,value) VALUES(?,?) "
-                     "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                     (CHECKPOINT, json.dumps(hermes['signatures'])))
+        if hermes_path.is_file() and hermes_messages:
+            conn.execute("INSERT INTO archive_settings(key,value) VALUES('hermes_scan_signature',?) "
+                         "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (signature,))
         conn.execute("INSERT INTO archive_settings(key,value) VALUES('local_mirror_files',?) "
                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (json.dumps(current),))
-    return {'changed_facts': changed, 'local_device_id': device_id,
-            'hermes': {key: hermes[key] for key in
-                       ('sources', 'scanned', 'unchanged', 'read_errors', 'errors')}}
+    return {'changed_facts': changed, 'local_device_id': device_id}
 
 
 def _exchange_dir(db: Database) -> Path | None:
@@ -343,8 +394,20 @@ def export_packets(db: Database, device_id: str) -> int:
         row = conn.execute("SELECT value FROM archive_settings WHERE key='last_exported_seq'").fetchone()
         after = int(row[0]) if row else 0
         device = dict(conn.execute('SELECT id,name,os FROM archive_devices WHERE id=?', (device_id,)).fetchone())
-        rows = [dict(r) for r in conn.execute(
-            'SELECT * FROM archive_log WHERE seq>? AND device_id=? ORDER BY seq', (after, device_id))]
+        high = conn.execute('SELECT coalesce(max(seq),0) FROM archive_log WHERE device_id=?', (device_id,)).fetchone()[0]
+    def rows():
+        cursor = after
+        while cursor < high:
+            with db.read() as conn:
+                page = [dict(r) for r in conn.execute(
+                    'SELECT * FROM archive_log WHERE seq>? AND seq<=? AND device_id=? ORDER BY seq LIMIT 128',
+                    (cursor, high, device_id))]
+            if not page:
+                return
+            for item in page:
+                item['payload_json'] = unpack_cold_payload(item['payload_json'])
+                yield item
+            cursor = page[-1]['seq']
     written = 0
     batch: list[dict] = []
     size = 0
@@ -369,7 +432,7 @@ def export_packets(db: Database, device_id: str) -> int:
                          "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (str(batch[-1]['seq']),))
         written += 1
         batch, size = [], 0
-    for row in rows:
+    for row in rows():
         size += len(row['payload_json'].encode('utf-8'))
         batch.append(row)
         if size >= _PACKET_LIMIT:
@@ -447,10 +510,7 @@ def refresh(db: Database, *, force: bool = False) -> dict:
         exported = export_packets(db, device_id)
         imported = import_packets(db, device_id)
         _LAST_RUN[key] = time.monotonic()
-    return {**status(db), 'scan': {'codex': codex, 'claude': claude, 'activity': activity,
-            'hermes': {**local['hermes'],
-                       'scanned': before['hermes']['scanned'] + local['hermes']['scanned'],
-                       'read_errors': max(before['hermes']['read_errors'], local['hermes']['read_errors'])}},
+    return {**status(db), 'scan': {'codex': codex, 'claude': claude, 'activity': activity},
             'changed_facts': before['changed_facts'] + local['changed_facts'],
             'exported_packets': exported,
             'imported_packets': imported}

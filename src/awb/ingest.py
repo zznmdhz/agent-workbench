@@ -8,6 +8,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from .auth import now_iso
+from .archive_payload_codec import pack as pack_cold_payload
 from .codec import ack_prefix, sha256
 from .db import Database
 from .models import Batch
@@ -44,8 +45,13 @@ def receive_batch(db: Database, device_id: str, batch: Batch) -> dict:
     digest = sha256(batch_json)
     received = now_iso()
     current_server_epoch = server_epoch(db)
+    from . import raw_archive
+    raw_archive.initialize(db)
     receipts = []
     with db.tx() as conn:
+        # All newly inserted facts, including reassembled fragment targets, belong
+        # to this transaction. Retries/duplicates must not rescan old sessions.
+        before_rowid = conn.execute('SELECT COALESCE(max(rowid),0) FROM events').fetchone()[0]
         old_batch = conn.execute("SELECT body_hash FROM ingest_batches WHERE batch_id=?", (str(batch.batch_id),)).fetchone()
         if old_batch and old_batch[0] != digest:
             raise HTTPException(409, "Batch ID reused with different content")
@@ -72,6 +78,9 @@ def receive_batch(db: Database, device_id: str, batch: Batch) -> dict:
             if policy == "stats_only" and c["fact_kind"] == "message.observed":
                 if c["payload"].get("body") is not None or c["payload"].get("body_ref") is not None:
                     raise HTTPException(403, "Source policy forbids message body")
+            if policy == "stats_only" and (c["fact_kind"] in {"native.observed", "artifact.observed", "capture.fragment"}
+                    or c["payload"].get("native") is not None):
+                raise HTTPException(403, "Source policy forbids native content and artifacts")
             receipt_id = str(uuid4())
             status = "accepted"
             reason = None
@@ -97,7 +106,7 @@ def receive_batch(db: Database, device_id: str, batch: Batch) -> dict:
                               VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                             (ev["event_id"], ev["body_hash"], c["source_instance_id"], c["native_session_id"],
                              c["fact_kind"], c["native_fact_id"], c["revision_key"], c.get("source_order"),
-                             c.get("occurred_at"), json.dumps(c, ensure_ascii=False), received),
+                             c.get("occurred_at"), pack_cold_payload(json.dumps(c, ensure_ascii=False)), received),
                         )
                         project(conn, ev)
                         conn.execute("RELEASE SAVEPOINT item_projection")
@@ -113,6 +122,10 @@ def receive_batch(db: Database, device_id: str, batch: Batch) -> dict:
                 (device_id, epoch, seq, ev["event_id"], ev["body_hash"], status, receipt_id, reason, raw, received),
             )
             receipts.append({"seq": seq, "status": status, "receipt_id": receipt_id, "reason": reason})
+        # Archive visibility and raw receipts commit together. A bridge failure
+        # rolls the whole batch back; the collector must retry rather than receive
+        # a successful ACK for data the MVP will never display.
+        raw_archive.project_raw_conn(conn, after_rowid=before_rowid)
         durable, projected = _acks(conn, device_id, epoch)
     return {"receipts": receipts, "durable_ack_seq": durable, "projected_ack_seq": projected, "server_epoch": current_server_epoch}
 

@@ -8,6 +8,7 @@ in one transaction, then transport sends committed outbox rows.
 from __future__ import annotations
 
 import json
+import base64
 import os
 import re
 import sqlite3
@@ -21,6 +22,7 @@ from uuid import uuid4
 import httpx
 
 from .codec import event_id, iso_utc, sha256, unicode_codepoints, utc_ms
+from .capture import CAPTURE_VERSION, native_payload, explicit_references, artifact_payloads
 from .filecheck import check_local, safe_relative
 from .resources import sample_local
 
@@ -50,7 +52,23 @@ CREATE TABLE IF NOT EXISTS blocked_sessions(
   source_id TEXT NOT NULL,native_session_id TEXT NOT NULL,blocked_at TEXT NOT NULL,
   PRIMARY KEY(source_id,native_session_id));
 """
-MAX_BODY_CHARS = 16_000
+HERMES_MESSAGE_FIELDS = {"id", "session_id", "role", "content", "timestamp", "tool_calls", "tool_call_id",
+                         "tool_name", "finish_reason", "reasoning", "reasoning_content", "model",
+                         "provider", "token_count", "input_tokens", "output_tokens", "attachments",
+                         "parent_message_id", "turn_id", "run_id", "message_id", "reasoning_details", "codex_reasoning_items",
+                         "codex_message_items", "platform_message_id", "observed", "_compressed_summary",
+                         "active", "compacted", "api_content", "display_kind", "display_metadata", "display_identity",
+                         "display_order", "message_uid", "absorbed_message_uids", "tool_call_uids", "tool_call_uid",
+                         "effect_disposition"}
+HERMES_SESSION_FIELDS = {"id", "source", "started_at", "ended_at", "cwd", "model", "title",
+                         "parent_session_id", "parent_id", "run_id", "session_id", "end_reason",
+                         "input_tokens", "output_tokens", "cache_read_tokens", "reasoning_tokens", "cache_write_tokens",
+                         "created_source", "user_id", "chat_id", "chat_type", "thread_id", "display_name", "origin_json",
+                         "system_prompt", "system_prompt_hash", "message_count", "tool_call_count", "git_branch", "git_repo_root",
+                         "billing_provider", "billing_mode", "estimated_cost_usd", "actual_cost_usd", "cost_status",
+                         "cost_source", "pricing_version", "title_source", "last_activity_at", "last_activity_description",
+                         "last_activity_provenance", "api_call_count", "profile_name", "transport_profile", "rewind_count",
+                         "archived", "auto_archived", "pinned", "hidden", "last_read_at", "tool_names"}
 _OUTBOX_TRANSPORT_LOCK = RLock()
 
 
@@ -59,8 +77,12 @@ def _now() -> str:
 
 
 def _redact(value: str) -> tuple[str, bool]:
+    if len(re.findall(r"(?m)^[A-Z_][A-Z0-9_]*=", value)) >= 3:
+        return "[OMITTED: environment dump]", True
     patterns = [
-        r"(?i)(?:sk|ghp|gho|ghu|github_pat)_[A-Za-z0-9_-]{16,}",
+        r"(?i)(?:sk[-_]|ghp_|gho_|ghu_|github_pat_)[A-Za-z0-9_-]{16,}",
+        r"(?i)Bearer\s+[A-Za-z0-9._~+/-]{16,}",
+        r"(?i)(https?://)[^/\s:@]+:[^/\s@]+@",
         r"(?i)(?:api[_-]?key|token|password|secret)\s*[:=]\s*['\"]?[^\s'\";,]{8,}",
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
     ]
@@ -91,7 +113,7 @@ def _backfill_scope(start_at: str | None, end_at: str | None,
 
 def _in_backfill_scope(scope: dict, session_id: str | None, cwd: str | None,
                        at: str | None) -> bool:
-    if not session_id or not at:
+    if not session_id:
         return False
     ids = scope.get("native_session_ids") or []
     if ids and session_id not in ids:
@@ -108,7 +130,7 @@ def _in_backfill_scope(scope: dict, session_id: str | None, cwd: str | None,
             return False
     ms = utc_ms(at)
     if ms is None:
-        return False
+        return not (scope.get("start_at") or scope.get("end_at"))
     start = scope.get("start_at")
     end = scope.get("end_at")
     return not ((start and ms < utc_ms(start)) or (end and ms >= utc_ms(end)))
@@ -178,6 +200,30 @@ def make_event(source_id: str, native_session_id: str, kind: str, native_fact_id
     return {"schema_version": 1, "event_id": event_id(content), "body_hash": sha256(content), "content": content}
 
 
+def transport_facts(fact):
+    """Fragment large canonical facts, never truncate them or bypass HTTP limits."""
+    raw = json.dumps(fact, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    if len(raw) <= 700000:
+        return [fact]
+    c = fact["content"]
+    count = (len(raw) + 262143) // 262144
+    return [make_event(c["source_instance_id"], c["native_session_id"], "capture.fragment",
+                       f"{fact['event_id']}:{i}", fact["body_hash"], c["source_order"], c["occurred_at"],
+                       {"target_event_id": fact["event_id"], "target_body_hash": fact["body_hash"],
+                        "fragment_index": i, "fragment_count": count, "byte_length": len(raw),
+                        "data_base64": base64.b64encode(raw[i*262144:(i+1)*262144]).decode("ascii")},
+                       c["execution"]["physical_device_id"], c["execution"]["environment_id"])
+            for i in range(count)]
+
+
+def _capture_artifacts(source, session_id, references, cwd, before, at, device_id):
+    for ref in references:
+        for payload in artifact_payloads(ref, cwd, source, _redact):
+            identity = f"artifact:{before}:{sha256(ref)}:{payload.get('chunk_index', 'unavailable')}"
+            yield make_event(source["id"], session_id, "artifact.observed", identity,
+                             sha256(payload), before, at, payload, device_id, source.get("environment_id"))
+
+
 class Outbox:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -196,8 +242,17 @@ class Outbox:
                 db.execute("ALTER TABLE content_backfills ADD COLUMN last_locator TEXT")
             if not db.execute("SELECT 1 FROM meta WHERE key='epoch'").fetchone():
                 db.execute("INSERT INTO meta VALUES('epoch',?)", (str(uuid4()),))
+            if 'traffic_class' not in {r[1] for r in db.execute('PRAGMA table_info(outbox)')}:
+                db.execute('ALTER TABLE outbox ADD COLUMN traffic_class INTEGER')
+            # One bounded metadata migration; immutable payloads/seq are unchanged.
+            for row in db.execute("SELECT seq,event_json FROM outbox WHERE state='pending' AND traffic_class IS NULL ORDER BY seq"):
+                try: lane = self.traffic_class(json.loads(row['event_json']))
+                except (ValueError,KeyError,TypeError): lane = 100
+                db.execute('UPDATE outbox SET traffic_class=? WHERE seq=?',(lane,row['seq']))
+            db.execute('CREATE INDEX IF NOT EXISTS ix_outbox_realtime ON outbox(state,traffic_class,seq)')
             self._compact_acked(db)
             db.commit()
+            db.execute('PRAGMA journal_mode=WAL')
 
     def connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path, timeout=5)
@@ -318,13 +373,14 @@ class Outbox:
                         fact = self._versioned_message(db, fact)
                         if fact is None:
                             continue
-                    if db.execute("SELECT 1 FROM outbox WHERE event_id=?", (fact["event_id"],)).fetchone():
-                        continue
-                    observation = {"observed_at": _now(), "adapter_version": "0.1.0",
-                                   "source_locator": {"kind": "source_cursor", "value": sha256([source_id, locator])}}
-                    cursor = db.execute("INSERT INTO outbox(event_id,source_id,event_json,observation_json) VALUES(?,?,?,?)",
-                                        (fact["event_id"], source_id, json.dumps(fact, ensure_ascii=False), json.dumps(observation))).rowcount
-                    count += cursor
+                    for wire_fact in transport_facts(fact):
+                        if db.execute("SELECT 1 FROM outbox WHERE event_id=?", (wire_fact["event_id"],)).fetchone():
+                            continue
+                        observation = {"observed_at": _now(), "adapter_version": CAPTURE_VERSION,
+                                       "source_locator": {"kind": "source_cursor", "value": sha256([source_id, locator])}}
+                        inserted = db.execute("INSERT INTO outbox(event_id,source_id,event_json,observation_json,traffic_class) VALUES(?,?,?,?,?)",
+                                            (wire_fact["event_id"], source_id, json.dumps(wire_fact, ensure_ascii=False), json.dumps(observation),self.traffic_class(fact))).rowcount
+                        count += inserted
                 if advance_cursor:
                     db.execute("""INSERT INTO cursors(source_id,locator,offset,fingerprint,session_id,turn_id,cwd,patch_calls_json)
                         VALUES(?,?,?,?,?,?,?,?)
@@ -357,9 +413,13 @@ class Outbox:
             db.execute("BEGIN IMMEDIATE")
             db.execute("INSERT OR IGNORE INTO blocked_sessions VALUES(?,?,?)",
                        (source_id, native_session_id, _now()))
-            rows = db.execute("SELECT seq,event_json,state FROM outbox WHERE source_id=? AND state<>'acked'",
+            rows = db.execute("SELECT seq,event_json,state,receipt_id FROM outbox WHERE source_id=? AND state<>'acked'",
                               (source_id,)).fetchall()
             for row in rows:
+                if row['state']=='pending' and row['receipt_id']:
+                    # Already persisted remotely above the contiguous ACK gap:
+                    # its sequence/body identity must not be rewritten.
+                    continue
                 try:
                     prior = json.loads(row["event_json"])
                     content = prior["content"]
@@ -527,10 +587,38 @@ class Outbox:
                        ("failed" if error else "completed", _now(), error, source_id))
             db.commit()
 
-    def pending(self, limit: int = 100) -> list[dict]:
+    @staticmethod
+    def traffic_class(fact: dict) -> int:
+        c=fact['content'];kind=c['fact_kind'];p=c['payload']
+        if kind=='message.observed':return 10 if p.get('role') in {'user','assistant'} else 50
+        if kind in {'session.observed','usage.observed','run.observed'}:return 10
+        if kind=='native.observed':
+            try:
+                if json.loads(p.get('native_json','{}')).get('type')=='session_model_usage':return 10
+            except (ValueError,TypeError):pass
+        if kind=='capture.fragment':
+            # Old fragments carry no routing header. The first fragment can
+            # identify a message; keeping all fragments together is preferable.
+            return 20
+        return 90
+
+    def pending(self, limit: int = 100, byte_budget: int | None = None,
+                prefer_realtime: bool = False) -> list[dict]:
         with closing(self.connect()) as db:
-            rows = db.execute("SELECT * FROM outbox WHERE state='pending' ORDER BY seq LIMIT ?", (limit,)).fetchall()
-        return [dict(row) for row in rows]
+            sql=("SELECT * FROM outbox WHERE state='pending' AND receipt_id IS NULL ORDER BY traffic_class,seq LIMIT ?"
+                 if prefer_realtime else "SELECT * FROM outbox WHERE state='pending' ORDER BY seq LIMIT ?")
+            cursor = db.execute(sql, (limit,))
+            if byte_budget is None:
+                return [dict(row) for row in cursor.fetchall()]
+            pending = []
+            used_bytes = 0
+            for row in cursor:
+                row_bytes = len(row["event_json"].encode("utf-8")) + len(row["observation_json"].encode("utf-8")) + 256
+                if pending and used_bytes + row_bytes > byte_budget:
+                    break
+                pending.append(dict(row))
+                used_bytes += row_bytes
+            return pending
 
     def count_pending(self) -> int:
         with closing(self.connect()) as db:
@@ -551,6 +639,11 @@ class Outbox:
                                    (r["seq"], row["event_id"], row["event_json"], r.get("reason") or "unknown", r["receipt_id"], _now()))
                         db.execute("UPDATE outbox SET state='quarantined',receipt_id=?,reason=? WHERE seq=?",
                                    (r["receipt_id"], r.get("reason"), r["seq"]))
+                elif r['status'] in {'accepted','duplicate','ignored_tombstoned'}:
+                    # Persist delivery evidence, NOT a non-contiguous ACK.
+                    # Bodies stay intact and FIFO retry remains possible.
+                    db.execute("UPDATE outbox SET receipt_id=?,reason='received_waiting_contiguous_ack' WHERE seq=? AND state='pending'",(r['receipt_id'],r['seq']))
+            db.execute("UPDATE outbox SET state='acked',reason=NULL WHERE state='pending' AND receipt_id IS NOT NULL AND seq<=?",(durable_ack,))
             self._compact_acked(db)
             db.commit()
 
@@ -563,7 +656,7 @@ def _codex_text(item: dict) -> tuple[str | None, str | None]:
     for content in item.get("content", []):
         if isinstance(content, dict) and content.get("type") in {"input_text", "output_text", "text"}:
             chunks.append(content.get("text", ""))
-    return role, "\n".join(chunks) if chunks else None
+    return role, "\n".join(chunks)
 
 
 def codex_primary_session_meta(file: Path) -> dict | None:
@@ -645,16 +738,39 @@ def scan_codex(source: dict, outbox: Outbox, device_id: str, *,
                 try:
                     record = json.loads(line)
                 except (UnicodeError, json.JSONDecodeError):
+                    if not migration_only and policy != "excluded":
+                        facts.append(make_event(sid, session_id, "gap.observed", f"invalid:{before}", "1", before, None,
+                                                {"reason": "invalid_native_json", "byte_length": len(line), "line_hash": sha256(list(line))},
+                                                device_id, source.get("environment_id")))
                     continue
+                if not isinstance(record, dict):
+                    record = {"type": "non_object_record", "native_value": record}
                 typ = record.get("type")
-                payload = record.get("payload") or {}
+                payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
                 at = iso_utc(record.get("timestamp"))
                 if typ == "session_meta":
-                    if before == primary["offset"] and not backfill:
-                        facts.append(make_event(sid, session_id, "session.observed", "session", "1", before, at,
-                                                {"title": None, "cwd": cwd, "created_at": at}, device_id, source.get("environment_id")))
+                    if (before == primary["offset"] and not migration_only and (not backfill or
+                            _in_backfill_scope(backfill_scope, session_id, cwd, at))):
+                        from .session_identity import identity
+                        session_payload = {"title": None, "cwd": cwd, "created_at": at,
+                                           **identity('codex', {'session_source': payload.get('source'), 'created_at': at})}
+                        if policy == "full_content":
+                            session_payload["native"] = native_payload(record, _redact)
+                        facts.append(make_event(sid, session_id, "session.observed", "session", sha256(session_payload), before, at,
+                                                session_payload, device_id, source.get("environment_id")))
                 if not session_id or policy == "excluded":
                     continue
+                if (policy == "full_content" and not migration_only
+                        and not (typ == "response_item" and payload.get("type") == "message"
+                                 and payload.get("role") in {"user", "assistant", "system", "developer"})
+                        and not (typ == "session_meta" and before == primary["offset"])
+                        and (backfill_scope is None or _in_backfill_scope(backfill_scope, session_id, cwd, at))):
+                    facts.append(make_event(sid, session_id, "native.observed", f"native:{before}",
+                                            sha256(native_payload(record, _redact)), before, at,
+                                            native_payload(record, _redact), device_id, source.get("environment_id")))
+                if (policy == "full_content" and not migration_only and
+                        (backfill_scope is None or _in_backfill_scope(backfill_scope, session_id, cwd, at))):
+                    facts.extend(_capture_artifacts(source, session_id, explicit_references(record), cwd, before, at, device_id))
                 if typ == "event_msg" and payload.get("type") == "task_started":
                     turn_id = payload.get("turn_id") or None
                 elif typ == "event_msg" and payload.get("type") == "task_complete":
@@ -664,8 +780,7 @@ def scan_codex(source: dict, outbox: Outbox, device_id: str, *,
                 if typ == "response_item" and payload.get("type") == "message":
                     if migration_only:
                         continue
-                    if backfill_scope is not None and (payload.get("role") not in {"user", "assistant"}
-                                                       or not _in_backfill_scope(
+                    if backfill_scope is not None and (not _in_backfill_scope(
                                                            backfill_scope, session_id, cwd, at)):
                         continue
                     role, body = _codex_text(payload)
@@ -676,16 +791,14 @@ def scan_codex(source: dict, outbox: Outbox, device_id: str, *,
                         state, reason, body = "stats_only", "source_policy", None
                     else:
                         body, changed = _redact(body)
-                        if len(body) > MAX_BODY_CHARS:
-                            body = body[:MAX_BODY_CHARS] + "\n[TRUNCATED BY COLLECTOR]"
-                            changed = True
                         state, reason = ("redacted" if changed else "full"), None
                     facts.append(make_event(sid, session_id, "message.observed", str(before), "1", before, at,
                                             {"native_message_id": str(before), "role": role,
                                              "input_origin": "human" if role == "user" else "agent",
                                              "content_state": state, "omission_reason": reason, "body": body,
                                              "source_text_char_count": original_chars, "finalized": True,
-                                             "native_turn_id": turn_id},
+                                             "native_turn_id": turn_id,
+                                             **({"native": native_payload(record, _redact)} if policy == "full_content" else {})},
                                             device_id, source.get("environment_id")))
                 elif typ == "response_item" and payload.get("type") == "custom_tool_call" and payload.get("name") == "apply_patch":
                     call_id = payload.get("call_id")
@@ -711,6 +824,8 @@ def scan_codex(source: dict, outbox: Outbox, device_id: str, *,
                             # Preserve the source-reported path rather than consulting today's
                             # filesystem (which might have moved since the patch completed).
                             resolved = os.path.normpath(str(path))
+                            if policy == "full_content" and not migration_only:
+                                facts.extend(_capture_artifacts(source, session_id, [resolved], patch_call["cwd"], before, at, device_id))
                             root_ref, relative_path = _source_cwd_file_ref(
                                 sid, patch_call["cwd"], resolved)
                             native_file_id = f"apply_patch:{call_id}:{sha256([relation, resolved])}"
@@ -771,6 +886,36 @@ def scan_codex(source: dict, outbox: Outbox, device_id: str, *,
     return count
 
 
+def hermes_usage_payload(row: dict) -> dict:
+    """Preserve native counters and billing identity; never infer missing calls."""
+    identity=[row.get(k) for k in ('model','billing_provider','billing_base_url','billing_mode','task')]
+    incoming,outgoing=row.get('input_tokens'),row.get('output_tokens')
+    return {'usage_key':sha256(identity),'quantity_semantics':'aggregate','coverage_scope':'session_model',
+            'model':row.get('model'),'provider':row.get('billing_provider'),
+            'billing_mode':row.get('billing_mode'),'task':row.get('task'),
+            'input_tokens':incoming,'output_tokens':outgoing,'cached_input_tokens':row.get('cache_read_tokens'),
+            'cache_read_tokens':row.get('cache_read_tokens'),'cache_write_tokens':row.get('cache_write_tokens'),
+            'reasoning_output_tokens':row.get('reasoning_tokens'),'api_call_count':row.get('api_call_count'),
+            'first_seen':iso_utc(row.get('first_seen')),'last_seen':iso_utc(row.get('last_seen')),
+            'total_tokens':incoming+outgoing if incoming is not None and outgoing is not None else None}
+
+
+def hermes_content_size_event(conn, source, native_id, device_id, message_columns):
+    """Count original UTF-8 fields at source; never export bodies in this fact."""
+    from .session_identity import HERMES_SIZE_FACT
+
+    if source.get('content_policy') == 'excluded' or not {'content','tool_calls'} <= message_columns:
+        return None
+    newest, size = conn.execute('''SELECT max(id),
+        sum(length(CAST(coalesce(content,'') AS BLOB))+length(CAST(coalesce(tool_calls,'') AS BLOB)))
+        FROM messages WHERE session_id=?''', (native_id,)).fetchone()
+    if newest is None or size is None:
+        return None
+    payload = {'payload_bytes':size}
+    return make_event(source['id'], native_id, 'session.observed', HERMES_SIZE_FACT,
+                      sha256([newest, size]), newest, None, payload, device_id, source.get('environment_id'))
+
+
 def scan_hermes(source: dict, outbox: Outbox, device_id: str, *,
                 backfill_scope: dict | None = None, after_locator: str | None = None,
                 max_units: int | None = None, progress: dict | None = None) -> int:
@@ -786,7 +931,12 @@ def scan_hermes(source: dict, outbox: Outbox, device_id: str, *,
     uri = path.as_uri() + "?mode=ro"
     with closing(sqlite3.connect(uri, uri=True, timeout=5)) as source_db:
         source_db.row_factory = sqlite3.Row
-        sessions = source_db.execute("SELECT id,source,started_at,ended_at,cwd,model,title FROM sessions ORDER BY started_at,id").fetchall()
+        session_available = {r[1] for r in source_db.execute("PRAGMA table_info(sessions)")}
+        message_available = {r[1] for r in source_db.execute("PRAGMA table_info(messages)")}
+        tables = {r[0] for r in source_db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        session_columns = sorted(HERMES_SESSION_FIELDS & session_available)
+        message_columns = sorted(HERMES_MESSAGE_FIELDS & message_available)
+        sessions = source_db.execute("SELECT " + ",".join(session_columns) + " FROM sessions ORDER BY started_at,id").fetchall()
         if backfill:
             sessions = sorted((s for s in sessions if after_locator is None or "session:" + str(s["id"]) > after_locator),
                               key=lambda s: "session:" + str(s["id"]))
@@ -803,64 +953,115 @@ def scan_hermes(source: dict, outbox: Outbox, device_id: str, *,
                 continue
             cursor = None if backfill else outbox.cursor(sid, locator)
             order = int(cursor["offset"]) if cursor else 0
+            prior_order = order
             facts = []
             at = iso_utc(s["started_at"])
-            session_payload = {"title": s["title"], "cwd": s["cwd"], "created_at": at}
-            if not backfill:
+            session_payload = {"title": s["title"], "cwd": s["cwd"], "created_at": at,
+                               "session_source": s['source'] if 'source' in s.keys() else None,
+                               "parent_session_id": s['parent_session_id'] if 'parent_session_id' in s.keys() else None}
+            if policy == "full_content":
+                session_payload["native"] = {**native_payload(dict(s), _redact),
+                                             "omitted_native_columns": sorted(session_available - HERMES_SESSION_FIELDS),
+                                             "unavailable_native_tables": [] if "session_model_usage" in tables else ["session_model_usage"]}
+            if not backfill or _in_backfill_scope(backfill_scope, s["id"], s["cwd"], at):
                 facts.append(make_event(sid, s["id"], "session.observed", "session", sha256(session_payload), 0, at,
                                         session_payload, device_id, source.get("environment_id")))
             if policy != "excluded":
-                messages = source_db.execute("SELECT id,role,content,timestamp FROM messages WHERE session_id=? AND id>? ORDER BY id",
-                                             (s["id"], order)).fetchall()
+                messages = source_db.execute("SELECT " + ",".join(message_columns) + " FROM messages WHERE session_id=? AND id>? ORDER BY id",
+                                             (s["id"], 0 if policy == "full_content" else order)).fetchall()
                 for m in messages:
-                    order = int(m["id"])
+                    order = max(order, int(m["id"]))
                     occurred_at = iso_utc(m["timestamp"])
-                    if backfill and (m["role"] not in {"user", "assistant"} or not _in_backfill_scope(
+                    if backfill and (not _in_backfill_scope(
                             backfill_scope, s["id"], s["cwd"], occurred_at)):
                         continue
                     body = m["content"] or ""
                     if not isinstance(body, str):
                         body = ""
+                    if policy == "full_content":
+                        facts.extend(_capture_artifacts(source, s["id"], explicit_references(dict(m)), s["cwd"], int(m["id"]), occurred_at, device_id))
                     original_chars = unicode_codepoints(body)
-                    if policy == "stats_only" or m["role"] not in {"user", "assistant"}:
+                    if policy == "stats_only":
                         state, reason, body = "stats_only", "source_policy", None
                     else:
                         body, changed = _redact(body)
-                        if len(body) > MAX_BODY_CHARS:
-                            body = body[:MAX_BODY_CHARS] + "\n[TRUNCATED BY COLLECTOR]"
-                            changed = True
                         state, reason = ("redacted" if changed else "full"), None
-                    facts.append(make_event(sid, s["id"], "message.observed", str(m["id"]), "1", order,
+                    facts.append(make_event(sid, s["id"], "message.observed", str(m["id"]), "1", int(m["id"]),
                                             occurred_at,
                                             {"native_message_id": str(m["id"]), "role": m["role"],
                                              "input_origin": "human" if m["role"] == "user" else "agent",
                                              "content_state": state, "omission_reason": reason, "body": body,
-                                             "source_text_char_count": original_chars, "finalized": True},
+                                             "source_text_char_count": original_chars, "finalized": True,
+                                             **({"native": {**native_payload(dict(m), _redact), "omitted_native_columns": sorted(message_available - HERMES_MESSAGE_FIELDS)}} if policy == "full_content" else {})},
                                             device_id, source.get("environment_id")))
-                usage_rows = [] if backfill else source_db.execute("""SELECT model,billing_provider,billing_base_url,billing_mode,task,
-                    input_tokens,output_tokens,cache_read_tokens,reasoning_tokens
-                    FROM session_model_usage WHERE session_id=?""", (s["id"],)).fetchall()
+                if (policy == "full_content" and "session_model_usage" in tables and
+                        (not backfill or _in_backfill_scope(backfill_scope, s["id"], s["cwd"], None))):
+                    allowed_usage = {"session_id", "model", "billing_provider", "billing_mode", "task", "api_call_count",
+                                     "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "reasoning_tokens",
+                                     "estimated_cost_usd", "actual_cost_usd", "cost_status", "cost_source", "first_seen", "last_seen"}
+                    usage_columns = sorted(allowed_usage & {r[1] for r in source_db.execute("PRAGMA table_info(session_model_usage)")})
+                    for native_usage in source_db.execute("SELECT " + ",".join(usage_columns) + " FROM session_model_usage WHERE session_id=?", (s["id"],)):
+                        usage_dict = dict(native_usage)
+                        native = native_payload({"type": "session_model_usage", "payload": usage_dict}, _redact)
+                        native_id = "usage:" + sha256([usage_dict.get(k) for k in ("model", "billing_provider", "billing_mode", "task")])
+                        facts.append(make_event(sid, s["id"], "native.observed", native_id, sha256(native), None,
+                                                None, native, device_id, source.get("environment_id")))
+                fields=('model','billing_provider','billing_base_url','billing_mode','task','input_tokens','output_tokens',
+                        'cache_read_tokens','reasoning_tokens','cache_write_tokens','api_call_count','first_seen','last_seen')
+                available={r[1] for r in source_db.execute('PRAGMA table_info(session_model_usage)')} if 'session_model_usage' in tables else set()
+                select=','.join(k if k in available else 'NULL AS '+k for k in fields)
+                usage_rows = [] if backfill or "session_model_usage" not in tables else source_db.execute(
+                    'SELECT '+select+' FROM session_model_usage WHERE session_id=?',(s['id'],)).fetchall()
                 for u in usage_rows:
-                    identity = [u["model"], u["billing_provider"], u["billing_base_url"], u["billing_mode"], u["task"]]
-                    totals = [u["input_tokens"], u["output_tokens"], u["cache_read_tokens"], u["reasoning_tokens"]]
-                    usage_key = sha256(identity)
-                    payload = {"usage_key": usage_key, "quantity_semantics": "aggregate",
-                               "coverage_scope": "session_model", "model": u["model"],
-                               "provider": u["billing_provider"], "input_tokens": u["input_tokens"],
-                               "output_tokens": u["output_tokens"], "cached_input_tokens": u["cache_read_tokens"],
-                               "reasoning_output_tokens": u["reasoning_tokens"],
-                               "total_tokens": sum(totals[:2]) if all(x is not None for x in totals[:2]) else None}
-                    facts.append(make_event(sid, s["id"], "usage.observed", usage_key,
-                                            sha256(totals), None, None, payload, device_id,
+                    payload = hermes_usage_payload(dict(u))
+                    facts.append(make_event(sid, s["id"], "usage.observed", payload['usage_key'],
+                                            sha256(payload), None, None, payload, device_id,
                                             source.get("environment_id"),
                                             {"certainty": "recorded", "rule_id": "hermes_session_model_aggregate",
-                                             "reason": "Session aggregate; no verified daily attribution"}))
+                                             "reason": "Native model counters; only attribute to buckets containing their complete native bounds"}))
+            if not backfill and order > prior_order:
+                size_fact = hermes_content_size_event(source_db, source, s['id'], device_id, message_available)
+                if size_fact:
+                    facts.append(size_fact)
             added = outbox.append(sid, locator, order, "hermes-db", s["id"], facts,
                                   advance_cursor=not backfill)
             count += added
             if backfill:
                 outbox.advance_content_backfill(sid, locator, added)
     return count
+
+
+def queue_capture_upgrade(config: dict, outbox: Outbox) -> int:
+    """Separately checkpointed parser/policy upgrade; never erase live cursors.
+
+    Existing owner-scoped jobs take precedence. Failed upgrades resume from their
+    last completed native unit. The completed marker commits with job completion.
+    """
+    queued = 0
+    with closing(outbox.connect()) as db:
+        db.execute("BEGIN IMMEDIATE")
+        for source in config.get("sources", []):
+            if source.get("content_policy") != "full_content":
+                continue
+            sid = source["id"]
+            marker = f"{CAPTURE_VERSION}:{sid}"
+            if db.execute("SELECT 1 FROM meta WHERE key=?", (marker,)).fetchone():
+                continue
+            old = db.execute("SELECT status,scope_json FROM content_backfills WHERE source_id=?", (sid,)).fetchone()
+            if old and old["status"] in {"queued", "running"}:
+                continue
+            if old and json.loads(old["scope_json"]).get("capture_upgrade") == marker and old["status"] == "failed":
+                db.execute("UPDATE content_backfills SET status='queued',error=NULL,finished_at=NULL WHERE source_id=?", (sid,))
+            else:
+                scope = {**_backfill_scope(None, None, None, None), "capture_upgrade": marker}
+                db.execute("""INSERT INTO content_backfills(source_id,agent,requested_at,status,scope_json)
+                    VALUES(?,?,?,'queued',?) ON CONFLICT(source_id) DO UPDATE SET agent=excluded.agent,
+                    requested_at=excluded.requested_at,status='queued',units_total=0,units_done=0,
+                    facts_queued=0,finished_at=NULL,error=NULL,last_locator=NULL,scope_json=excluded.scope_json""",
+                           (sid, source["agent"], _now(), json.dumps(scope)))
+            queued += 1
+        db.commit()
+    return queued
 
 
 def process_content_backfill(config: dict, outbox: Outbox, max_units: int = 4) -> dict:
@@ -892,6 +1093,8 @@ def process_content_backfill(config: dict, outbox: Outbox, max_units: int = 4) -
             processed += progress["units"]
             if not progress["has_more"]:
                 outbox.finish_content_backfill(sid)
+                if scope.get("capture_upgrade"):
+                    outbox.mark_once(scope["capture_upgrade"])
         except (OSError, sqlite3.DatabaseError, ValueError) as exc:
             outbox.finish_content_backfill(sid, type(exc).__name__)
             errors[sid] = type(exc).__name__
@@ -915,25 +1118,16 @@ def backfill_codex_cached_input_history_once(source: dict, outbox: Outbox,
     return added
 
 
-def send_pending(config: dict, outbox: Outbox) -> dict:
+def send_pending(config: dict, outbox: Outbox, *, prefer_realtime: bool = False) -> dict:
     # Deletion must not rewrite a sequence while it is being transmitted.
     with _OUTBOX_TRANSPORT_LOCK:
-        return _send_pending_locked(config, outbox)
+        return _send_pending_locked(config, outbox, prefer_realtime=prefer_realtime)
 
 
-def _send_pending_locked(config: dict, outbox: Outbox) -> dict:
-    candidates = outbox.pending(500)
-    pending = []
-    byte_budget = 3 * 1024 * 1024
-    used_bytes = 0
-    for row in candidates:
-        row_bytes = len(row["event_json"].encode("utf-8")) + len(row["observation_json"].encode("utf-8")) + 256
-        if pending and used_bytes + row_bytes > byte_budget:
-            break
-        pending.append(row)
-        used_bytes += row_bytes
+def _send_pending_locked(config: dict, outbox: Outbox, *, prefer_realtime: bool = False) -> dict:
+    pending = outbox.pending(500, byte_budget=3 * 1024 * 1024,prefer_realtime=prefer_realtime)
     if not pending:
-        return {"sent": 0, "pending": 0}
+        return {"sent": 0, "pending": outbox.count_pending()}
     body = {"batch_id": str(uuid4()), "collector_id": config["collector_id"],
             "outbox_epoch": outbox.epoch(), "entries": []}
     for row in pending:
@@ -958,6 +1152,7 @@ def _send_pending_locked(config: dict, outbox: Outbox) -> dict:
 
 
 def run_cycle(config: dict, outbox: Outbox) -> dict:
+    queue_capture_upgrade(config, outbox)
     added = 0
     errors = {}
     for source in config.get("sources", []):
@@ -973,7 +1168,7 @@ def run_cycle(config: dict, outbox: Outbox) -> dict:
     added += backfill["queued"]
     sent = {"sent": 0, "pending": outbox.count_pending()}
     deadline = time.monotonic() + 25
-    while sent["pending"] and time.monotonic() < deadline:
+    while not config.get('_transport_in_worker') and sent["pending"] and time.monotonic() < deadline:
         batch = send_pending(config, outbox)
         sent["sent"] += batch["sent"]
         sent["pending"] = batch["pending"]

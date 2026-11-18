@@ -125,8 +125,6 @@ def _serve(db_path: Path, port: int, browser: bool, tray: bool) -> None:
     stop = Event()
     background = service.state.background
     background.start()
-    if service.state.memory_worker:
-        service.state.memory_worker.start()
     from . import autostart
     background.set(autostart=autostart.registered())
 
@@ -169,8 +167,6 @@ def _serve(db_path: Path, port: int, browser: bool, tray: bool) -> None:
     finally:
         stop.set()
         background.stop()
-        if service.state.memory_worker:
-            service.state.memory_worker.stop()
         if icon:
             icon.stop()
         sys.stdout, sys.stderr = previous_stdout, previous_stderr

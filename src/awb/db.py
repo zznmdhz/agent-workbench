@@ -6,6 +6,26 @@ import sqlite3
 from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Iterator
+from .archive_payload_codec import MAGIC, unpack as unpack_cold_payload
+
+
+def logical_payload(value):
+    if isinstance(value, bytes) and value.startswith(MAGIC):
+        return unpack_cold_payload(value)
+    return value
+
+
+class LogicalRow(sqlite3.Row):
+    """Keep existing application row semantics over optional physical compression."""
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            return tuple(self[i] for i in range(*key.indices(len(self))))
+        value = super().__getitem__(key)
+        name = key.lower() if isinstance(key, str) else self.keys()[key].lower()
+        return logical_payload(value) if name in {'content_json', 'payload_json'} else value
+
+    def __iter__(self):
+        return (self[i] for i in range(len(self)))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version(version INTEGER NOT NULL);
@@ -147,6 +167,13 @@ CREATE TABLE IF NOT EXISTS file_check_jobs(
   status TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
   result_json TEXT
 );
+CREATE TABLE IF NOT EXISTS capture_fragments(
+  target_event_id TEXT NOT NULL,fragment_index INTEGER NOT NULL,fragment_count INTEGER NOT NULL,
+  byte_length INTEGER NOT NULL,data BLOB NOT NULL,source_id TEXT NOT NULL,native_session_id TEXT NOT NULL,
+  PRIMARY KEY(target_event_id,fragment_index));
+CREATE TABLE IF NOT EXISTS capture_blob_chunks(
+  hash TEXT NOT NULL,chunk_index INTEGER NOT NULL,chunk_count INTEGER NOT NULL,
+  byte_length INTEGER NOT NULL,data BLOB NOT NULL,PRIMARY KEY(hash,chunk_index));
 CREATE TABLE IF NOT EXISTS blobs(
   hash TEXT PRIMARY KEY, byte_length INTEGER NOT NULL, stored_at TEXT NOT NULL
 );
@@ -218,10 +245,11 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
     def connect(self) -> sqlite3.Connection:
-        db = sqlite3.connect(self.path, timeout=5, isolation_level=None)
-        db.row_factory = sqlite3.Row
+        db = sqlite3.connect(self.path, timeout=60, isolation_level=None)
+        db.row_factory = LogicalRow
+        db.create_function('awb_payload_text', 1, logical_payload, deterministic=True)
         db.execute("PRAGMA foreign_keys=ON")
-        db.execute("PRAGMA busy_timeout=5000")
+        db.execute("PRAGMA busy_timeout=60000")
         return db
 
     def initialize(self) -> None:
@@ -250,6 +278,20 @@ class Database:
             except sqlite3.OperationalError:
                 # Query code uses bounded LIKE when FTS5/trigram is absent.
                 pass
+            else:
+                # Backfill only the rowid lookup, never rebuild or retokenize FTS.
+                # Table creation and seed are atomic; existence marks completion.
+                db.execute("BEGIN IMMEDIATE")
+                try:
+                    if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='messages_fts_rows'").fetchone():
+                        db.execute("CREATE TABLE messages_fts_rows(fts_rowid INTEGER PRIMARY KEY, message_id TEXT NOT NULL)")
+                        db.execute("CREATE INDEX ix_messages_fts_rows_message ON messages_fts_rows(message_id)")
+                        db.execute("INSERT INTO messages_fts_rows(fts_rowid,message_id) SELECT rowid,message_id FROM messages_fts")
+                    db.execute("COMMIT")
+                except Exception:
+                    if db.in_transaction:
+                        db.execute("ROLLBACK")
+                    raise
             version_row = db.execute("SELECT version FROM schema_version").fetchone()
             if version_row[0] != 1:
                 raise RuntimeError(f"Unsupported database schema {version_row[0]}; use a matching app version")
@@ -262,7 +304,8 @@ class Database:
             yield db
             db.execute("COMMIT")
         except Exception:
-            db.execute("ROLLBACK")
+            if db.in_transaction:
+                db.execute("ROLLBACK")
             raise
         finally:
             db.close()

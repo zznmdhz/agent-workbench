@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from .backup import create_backup
+from .archive_payload_codec import pack as pack_cold_payload, unpack as unpack_cold_payload
 from .codec import event_id, sha256
 from .collector import Outbox, codex_primary_session_meta, scan_codex
 from .db import Database
@@ -160,7 +161,7 @@ def _restore_existing_bodies(conn: sqlite3.Connection, old_bodies: list[dict]) -
         if not current_event:
             unavailable += 1
             continue
-        content = json.loads(current_event[0])
+        content = json.loads(unpack_cold_payload(current_event[0]))
         content["revision_key"] = f"identity_repair:{sha256([target['id'], old['body']])[:16]}"
         content["supersedes_event_id"] = target["event_id"]
         content["payload"] = {**content["payload"], "body": old["body"],
@@ -174,7 +175,7 @@ def _restore_existing_bodies(conn: sqlite3.Connection, old_bodies: list[dict]) -
             (event["event_id"], event["body_hash"], content["source_instance_id"],
              content["native_session_id"], content["fact_kind"], content["native_fact_id"],
              content["revision_key"], content.get("source_order"), content.get("occurred_at"),
-             json.dumps(content, ensure_ascii=False), datetime.now(timezone.utc).isoformat()))
+             pack_cold_payload(json.dumps(content, ensure_ascii=False)), datetime.now(timezone.utc).isoformat()))
         project(conn, event)
         restored += 1
     return {"restored": restored, "ambiguous": ambiguous, "unavailable": unavailable,

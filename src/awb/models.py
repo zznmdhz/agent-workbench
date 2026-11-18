@@ -11,7 +11,7 @@ from .codec import event_id, sha256, utc_ms
 
 FactKind = Literal[
     "session.observed", "message.observed", "run.observed", "usage.observed",
-    "file.observed", "gap.observed",
+    "file.observed", "gap.observed", "native.observed", "artifact.observed", "capture.fragment",
 ]
 
 

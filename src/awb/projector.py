@@ -53,6 +53,16 @@ def project(db: sqlite3.Connection, event: dict[str, Any]) -> None:
         old = db.execute("SELECT source_order,event_id,body,content_state,turn_id FROM messages WHERE id=?", (msg_id,)).fetchone()
         incoming = c.get("source_order")
         revision = bool(old and c.get("supersedes_event_id") == old["event_id"])
+        if old and incoming == old['source_order']:
+            previous = db.execute('SELECT revision_key FROM events WHERE event_id=?',(old['event_id'],)).fetchone()
+            def collector_revision(key):
+                if key=='1':return 1
+                if isinstance(key,str) and key.startswith('collector:') and key[10:].isdigit():return int(key[10:])
+                return None
+            before=collector_revision(previous[0]) if previous else None
+            after=collector_revision(c.get('revision_key'))
+            if before is not None and after is not None and after<before:
+                return  # Late fragments may deliver a predecessor after its revision.
         if old and not revision and incoming is not None and old["source_order"] is not None and incoming < old["source_order"]:
             return
         body = p.get("body") if p["content_state"] in {"full", "redacted"} else None
@@ -77,10 +87,21 @@ def project(db: sqlite3.Connection, event: dict[str, Any]) -> None:
              at, p.get("native_turn_id") or (old["turn_id"] if old else None), event["event_id"],
              incoming if incoming is not None else (old["source_order"] if old else None), int(bool(p["finalized"]))),
         )
+        from .time_evidence import record as record_turn_boundary
+        record_turn_boundary(db, event, agent_row[0])
         try:
-            db.execute("DELETE FROM messages_fts WHERE message_id=?", (msg_id,))
+            # message_id is UNINDEXED in FTS5. Resolve via the ordinary B-tree
+            # and constrain FTS by rowid, not a full scan for every revision.
+            # Owner deletion/identity repair can leave stale lookup entries;
+            # check identity too so a reused FTS rowid cannot delete another message.
+            db.execute("""DELETE FROM messages_fts WHERE rowid IN
+                (SELECT fts_rowid FROM messages_fts_rows WHERE message_id=?)
+                AND message_id=?""", (msg_id, msg_id))
+            db.execute("DELETE FROM messages_fts_rows WHERE message_id=?", (msg_id,))
             if body:
-                db.execute("INSERT INTO messages_fts(message_id,body) VALUES(?,?)", (msg_id, body))
+                cursor = db.execute("INSERT INTO messages_fts(message_id,body) VALUES(?,?)", (msg_id, body))
+                db.execute("INSERT OR REPLACE INTO messages_fts_rows(fts_rowid,message_id) VALUES(?,?)",
+                           (cursor.lastrowid, msg_id))
         except sqlite3.OperationalError:
             pass
     elif c["fact_kind"] == "run.observed":
@@ -154,7 +175,13 @@ def project(db: sqlite3.Connection, event: dict[str, Any]) -> None:
              p.get("run_ref"), p.get("size_bytes"), p.get("mtime"), p.get("checked_at"),
              json.dumps(p.get("evidence_refs", []), ensure_ascii=False)),
         )
-    # gap.observed remains in immutable events and health summaries.
+    elif c["fact_kind"] == "capture.fragment":
+        from .fragments import project_fragment
+        project_fragment(db, event)
+    elif c["fact_kind"] == "artifact.observed":
+        from .blobs import project_chunk
+        project_chunk(db, p)
+    # gap/native remain in immutable events, not the ordinary query projection.
     old_activity = db.execute("SELECT last_activity FROM sessions WHERE id=?", (session_id,)).fetchone()[0]
     last_activity = _newer(old_activity, at)
     if last_activity != old_activity:
